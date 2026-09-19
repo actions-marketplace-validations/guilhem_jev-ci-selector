@@ -1,0 +1,45 @@
+name: jev-ci-selector
+description: Produce a conservative CI task selection plan using deterministic rules and Jev.
+inputs:
+  config:
+    description: Repository-relative catalog path (read from the PR base commit).
+    default: .github/ci-selector.yml
+  mode:
+    description: shadow preserves all effective tasks; enforce applies the proposal.
+    default: shadow
+  github-token:
+    description: Read-only GitHub token for fetching immutable Git objects.
+    default: ${{ github.token }}
+  api-key:
+    description: TypeSafe key; absence bypasses semantic selection.
+    default: ''
+  allow-external-context:
+    description: Explicit permission to send the diff and metadata to TypeSafe.
+    default: 'false'
+  force-all:
+    description: Bypass optimization immediately.
+    default: 'false'
+  timeout-ms:
+    description: Maximum Jev request duration, without retries.
+    default: '10000'
+  max-diff-bytes:
+    description: Maximum complete UTF-8 diff size; not a token count.
+    default: '65536'
+outputs:
+  run:
+    description: JSON map from every catalog task ID to its effective boolean.
+  selected:
+    description: JSON array of effective task IDs in stable order.
+  matrix:
+    description: JSON include matrix of effective task IDs.
+  has-tasks:
+    description: The string true or false, for a job condition before matrix expansion.
+  status:
+    description: planned, bypassed, or fallback.
+  tested-sha:
+    description: Immutable commit the consumers must test.
+  report-path:
+    description: Local path of the source-free JSON report.
+runs:
+  using: node24
+  main: dist/index.js

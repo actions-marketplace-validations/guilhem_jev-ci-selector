@@ -1,0 +1,37 @@
+version: 1
+model: jev-1.13.0
+skip_below: 0.05
+
+force_all_paths:
+  - .github/**
+  - ci/**
+  - go.mod
+  - go.sum
+
+# The matrix launcher has a fixed allowlist for these IDs. Keep it in sync
+# with this catalog; the integration validator rejects drift.
+tasks:
+  build:
+    question: Does this change affect compiled Go packages?
+    run_if_paths:
+      - cmd/**
+  e2e_network:
+    question: Does this change affect network end-to-end behavior?
+    run_if_paths:
+      - pkg/network/**
+  e2e_upgrade:
+    question: Does this change affect the upgrade path?
+    run_if_paths:
+      - internal/upgrade/**
+  helm:
+    question: Does this change affect a Helm chart?
+    run_if_paths:
+      - charts/**
+  lint:
+    question: Does this change affect Go source or static-analysis configuration?
+    run_if_paths:
+      - internal/**
+  unit:
+    question: Does this change affect package behavior?
+    run_if_paths:
+      - pkg/**

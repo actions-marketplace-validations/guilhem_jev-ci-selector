@@ -1,0 +1,159 @@
+name: CI (matrix)
+
+on:
+  pull_request:
+  push:
+  schedule:
+    - cron: '17 3 * * *'
+  merge_group:
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ github.event_name == 'pull_request' && steps.select.outputs.run || steps.full.outputs.run }}
+      selected: ${{ github.event_name == 'pull_request' && steps.select.outputs.selected || steps.full.outputs.selected }}
+      matrix: ${{ github.event_name == 'pull_request' && steps.select.outputs.matrix || steps.full.outputs.matrix }}
+      has-tasks: ${{ github.event_name == 'pull_request' && steps.select.outputs.has-tasks || steps.full.outputs.has-tasks }}
+      status: ${{ github.event_name == 'pull_request' && steps.select.outputs.status || steps.full.outputs.status }}
+      tested-sha: ${{ github.event_name == 'pull_request' && steps.select.outputs.tested-sha || steps.full.outputs.tested-sha }}
+    steps:
+      - name: Select pull request tasks
+        id: select
+        if: ${{ github.event_name == 'pull_request' }}
+        # Placeholder: replace with the published OWNER/jev-ci-selector full SHA.
+        uses: OWNER/jev-ci-selector@0000000000000000000000000000000000000000
+        with:
+          config: .github/ci-selector.yml
+          mode: shadow
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          api-key: ${{ secrets.JEV_API_KEY }}
+          # Explicit authorization to send the diff, paths, and task questions
+          # to TypeSafe.
+          allow-external-context: 'true'
+          force-all: 'false'
+      - name: Plan full CI for non pull request events
+        id: full
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          TESTED_SHA: ${{ github.sha }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const tasks = ['build', 'e2e_network', 'e2e_upgrade', 'helm', 'lint', 'unit'];
+          const run = Object.fromEntries(tasks.map((task) => [task, true]));
+          const matrix = { include: tasks.map((task) => ({ task })) };
+          const set = (name, value) => fs.appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
+          set('run', JSON.stringify(run));
+          set('selected', JSON.stringify(tasks));
+          set('matrix', JSON.stringify(matrix));
+          set('has-tasks', 'true');
+          set('status', 'bypassed');
+          set('tested-sha', process.env.TESTED_SHA);
+          NODE
+
+  ci-contract:
+    needs: plan
+    if: ${{ always() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+          ref: ${{ needs.plan.outputs.tested-sha }}
+          fetch-depth: 1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      # This check also runs when the proposed task matrix is empty.
+      - run: node .github/ci-selector-validate.cjs .
+
+  tasks:
+    needs: [plan, ci-contract]
+    # This condition is evaluated before matrix expansion. Empty selections
+    # therefore skip this job cleanly and are accepted by ci-required.
+    if: ${{ always() && needs.plan.result == 'success' && needs.ci-contract.result == 'success' && needs.plan.outputs.has-tasks == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          # On a pull request this is github.sha, the merge commit tested by
+          # the selector. Never run a selected task from an untested head.
+          ref: ${{ needs.plan.outputs.tested-sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Run selected task
+        env:
+          TASK: ${{ matrix.task }}
+        run: |
+          set -eu
+          case "$TASK" in
+            build) go build ./... ;;
+            e2e_network) ./ci/e2e-network.sh ;;
+            e2e_upgrade) ./ci/e2e-upgrade.sh ;;
+            helm) helm lint charts/* ;;
+            lint) go vet ./... ;;
+            unit) go test ./... ;;
+            *) echo "unsupported task: $TASK" >&2; exit 2 ;;
+          esac
+
+  ci-required:
+    if: ${{ always() }}
+    needs: [plan, ci-contract, tasks]
+    runs-on: ubuntu-latest
+    env:
+      EXPECTED_TASKS: build,e2e_network,e2e_upgrade,helm,lint,unit
+      EXPECTED_NEEDS: ci-contract,plan,tasks
+      PLAN_RESULT: ${{ needs.plan.result }}
+      PLAN_RUN: ${{ needs.plan.outputs.run }}
+      PLAN_SELECTED: ${{ needs.plan.outputs.selected }}
+      PLAN_MATRIX: ${{ needs.plan.outputs.matrix }}
+      PLAN_HAS_TASKS: ${{ needs.plan.outputs.has-tasks }}
+      PLAN_STATUS: ${{ needs.plan.outputs.status }}
+      PLAN_TESTED_SHA: ${{ needs.plan.outputs.tested-sha }}
+      EXPECTED_TESTED_SHA: ${{ github.sha }}
+      NEEDS_JSON: ${{ toJSON(needs) }}
+    steps:
+      - name: Validate plan and matrix result
+        run: |
+          node <<'NODE'
+          const fail = (message) => { console.error(`ci-required: ${message}`); process.exitCode = 1; };
+          const expected = process.env.EXPECTED_TASKS.split(',').filter(Boolean);
+          const sorted = (values) => [...values].sort();
+          const parseJSON = (name) => { try { return JSON.parse(process.env[name] ?? ''); } catch { fail(`malformed ${name.toLowerCase()}`); return undefined; } };
+          const runValue = parseJSON('PLAN_RUN');
+          const selectedValue = parseJSON('PLAN_SELECTED');
+          const matrixValue = parseJSON('PLAN_MATRIX');
+          const needsValue = parseJSON('NEEDS_JSON');
+          const run = runValue && typeof runValue === 'object' && !Array.isArray(runValue) ? runValue : {};
+          const selected = Array.isArray(selectedValue) ? selectedValue : [];
+          const matrix = matrixValue && typeof matrixValue === 'object' && !Array.isArray(matrixValue) ? matrixValue : {};
+          const needs = needsValue && typeof needsValue === 'object' && !Array.isArray(needsValue) ? needsValue : {};
+          if (process.env.PLAN_RESULT !== 'success') fail('planning job did not succeed');
+          if (!['planned', 'bypassed', 'fallback'].includes(process.env.PLAN_STATUS)) fail('invalid status');
+          if (!process.env.PLAN_TESTED_SHA || process.env.PLAN_TESTED_SHA !== process.env.EXPECTED_TESTED_SHA) fail('tested-sha is not the event SHA');
+          const runKeysValid = runValue !== null && typeof runValue === 'object' && !Array.isArray(runValue) && JSON.stringify(Object.keys(run).sort()) === JSON.stringify(expected);
+          const runValuesValid = expected.every((task) => typeof run[task] === 'boolean');
+          if (!runKeysValid || !runValuesValid) fail('run shape diverges from catalog');
+          const selectedShapeValid = Array.isArray(selectedValue) && selected.every((task) => typeof task === 'string' && expected.includes(task)) && new Set(selected).size === selected.length;
+          if (!selectedShapeValid || JSON.stringify(selected) !== JSON.stringify(sorted(selected)) || JSON.stringify(selected) !== JSON.stringify(expected.filter((task) => run[task] === true))) fail('selected is inconsistent with run');
+          if (!['true', 'false'].includes(process.env.PLAN_HAS_TASKS ?? '') || (process.env.PLAN_HAS_TASKS === 'true') !== (selected.length > 0)) fail('has-tasks is inconsistent');
+          const matrixItems = Array.isArray(matrix.include) ? matrix.include : [];
+          const matrixShapeValid = JSON.stringify(Object.keys(matrix).sort()) === '["include"]' && Array.isArray(matrix.include) && matrixItems.every((item) => item && typeof item === 'object' && !Array.isArray(item) && JSON.stringify(Object.keys(item).sort()) === '["task"]' && typeof item.task === 'string' && expected.includes(item.task)) && new Set(matrixItems.map((item) => item.task)).size === matrixItems.length;
+          if (!matrixShapeValid || JSON.stringify(matrixItems.map((item) => item.task)) !== JSON.stringify(selected)) fail('matrix is inconsistent with selected');
+          if (['bypassed', 'fallback'].includes(process.env.PLAN_STATUS ?? '') && expected.some((task) => run[task] !== true)) fail('bypassed or fallback plan must select every task');
+          if (JSON.stringify(Object.keys(needs ?? {}).sort()) !== JSON.stringify(['ci-contract', 'plan', 'tasks'])) fail('final needs IDs diverge from declared jobs');
+          if (needs['ci-contract']?.result !== 'success') fail('catalog/workflow validation did not succeed');
+          const matrixResult = needs.tasks?.result;
+          if (selected.length === 0) {
+            if (matrixResult !== 'skipped') fail(`empty matrix result is ${matrixResult ?? 'missing'}`);
+          } else if (matrixResult !== 'success') {
+            fail(`selected matrix result is ${matrixResult ?? 'missing'}`);
+          }
+          NODE

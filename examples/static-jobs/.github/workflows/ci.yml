@@ -1,0 +1,198 @@
+name: CI (static jobs)
+
+on:
+  pull_request:
+  push:
+  schedule:
+    - cron: '17 3 * * *'
+  merge_group:
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    # This job deliberately has no checkout, dependency install, or project
+    # script. The selector receives only its declared inputs while planning.
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ github.event_name == 'pull_request' && steps.select.outputs.run || steps.full.outputs.run }}
+      selected: ${{ github.event_name == 'pull_request' && steps.select.outputs.selected || steps.full.outputs.selected }}
+      matrix: ${{ github.event_name == 'pull_request' && steps.select.outputs.matrix || steps.full.outputs.matrix }}
+      has-tasks: ${{ github.event_name == 'pull_request' && steps.select.outputs.has-tasks || steps.full.outputs.has-tasks }}
+      status: ${{ github.event_name == 'pull_request' && steps.select.outputs.status || steps.full.outputs.status }}
+      tested-sha: ${{ github.event_name == 'pull_request' && steps.select.outputs.tested-sha || steps.full.outputs.tested-sha }}
+    steps:
+      - name: Select pull request tasks
+        id: select
+        if: ${{ github.event_name == 'pull_request' }}
+        # Placeholder: replace with the published OWNER/jev-ci-selector full SHA.
+        uses: OWNER/jev-ci-selector@0000000000000000000000000000000000000000
+        with:
+          config: .github/ci-selector.yml
+          mode: shadow
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          api-key: ${{ secrets.JEV_API_KEY }}
+          # This authorizes sending the diff, paths, and task questions to
+          # TypeSafe. Remove it when that authorization is not acceptable.
+          allow-external-context: 'true'
+          force-all: 'false'
+      - name: Plan full CI for non pull request events
+        id: full
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          TESTED_SHA: ${{ github.sha }}
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const tasks = ['build', 'e2e_network', 'e2e_upgrade', 'helm', 'lint', 'unit'];
+          const run = Object.fromEntries(tasks.map((task) => [task, true]));
+          const matrix = { include: tasks.map((task) => ({ task })) };
+          const set = (name, value) => fs.appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
+          set('run', JSON.stringify(run));
+          set('selected', JSON.stringify(tasks));
+          set('matrix', JSON.stringify(matrix));
+          set('has-tasks', 'true');
+          set('status', 'bypassed');
+          set('tested-sha', process.env.TESTED_SHA);
+          NODE
+
+  build:
+    needs: plan
+    if: ${{ always() && needs.plan.result == 'success' && fromJSON(needs.plan.outputs.run).build == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.plan.outputs.tested-sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - run: go build ./...
+
+  e2e_network:
+    needs: [plan, build]
+    if: ${{ always() && needs.plan.result == 'success' && needs.build.result == 'success' && fromJSON(needs.plan.outputs.run).e2e_network == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.plan.outputs.tested-sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      # The consuming repository supplies this script and its network policy.
+      - run: ./ci/e2e-network.sh
+
+  e2e_upgrade:
+    needs: [plan, build]
+    if: ${{ always() && needs.plan.result == 'success' && needs.build.result == 'success' && fromJSON(needs.plan.outputs.run).e2e_upgrade == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.plan.outputs.tested-sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - run: ./ci/e2e-upgrade.sh
+
+  helm:
+    needs: plan
+    if: ${{ always() && needs.plan.result == 'success' && fromJSON(needs.plan.outputs.run).helm == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.plan.outputs.tested-sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - run: helm lint charts/*
+
+  lint:
+    needs: plan
+    if: ${{ always() && needs.plan.result == 'success' && fromJSON(needs.plan.outputs.run).lint == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.plan.outputs.tested-sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      # Copy dist/validate.cjs to this path with the catalog and workflow.
+      # lint is mandatory, so ci-required cannot pass if the contract drifts.
+      - run: node .github/ci-selector-validate.cjs .
+      - run: go vet ./...
+
+  unit:
+    needs: plan
+    if: ${{ always() && needs.plan.result == 'success' && fromJSON(needs.plan.outputs.run).unit == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ needs.plan.outputs.tested-sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - run: go test ./...
+
+  ci-required:
+    if: ${{ always() }}
+    needs: [plan, build, e2e_network, e2e_upgrade, helm, lint, unit]
+    runs-on: ubuntu-latest
+    env:
+      EXPECTED_TASKS: build,e2e_network,e2e_upgrade,helm,lint,unit
+      EXPECTED_ALWAYS: build,lint,unit
+      EXPECTED_DEPENDENCIES: e2e_network=build;e2e_upgrade=build
+      EXPECTED_NEEDS: plan,build,e2e_network,e2e_upgrade,helm,lint,unit
+      PLAN_RESULT: ${{ needs.plan.result }}
+      PLAN_RUN: ${{ needs.plan.outputs.run }}
+      PLAN_SELECTED: ${{ needs.plan.outputs.selected }}
+      PLAN_MATRIX: ${{ needs.plan.outputs.matrix }}
+      PLAN_HAS_TASKS: ${{ needs.plan.outputs.has-tasks }}
+      PLAN_STATUS: ${{ needs.plan.outputs.status }}
+      PLAN_TESTED_SHA: ${{ needs.plan.outputs.tested-sha }}
+      EXPECTED_TESTED_SHA: ${{ github.sha }}
+      NEEDS_JSON: ${{ toJSON(needs) }}
+    steps:
+      - name: Validate plan and every required job
+        run: |
+          node <<'NODE'
+          const fail = (message) => { console.error(`ci-required: ${message}`); process.exitCode = 1; };
+          const expected = process.env.EXPECTED_TASKS.split(',').filter(Boolean);
+          const expectedNeeds = process.env.EXPECTED_NEEDS.split(',').filter(Boolean).sort();
+          const sorted = (values) => [...values].sort();
+          const parseJSON = (name) => { try { return JSON.parse(process.env[name] ?? ''); } catch { fail(`malformed ${name.toLowerCase()}`); return undefined; } };
+          const runValue = parseJSON('PLAN_RUN');
+          const selectedValue = parseJSON('PLAN_SELECTED');
+          const matrixValue = parseJSON('PLAN_MATRIX');
+          const needsValue = parseJSON('NEEDS_JSON');
+          const run = runValue && typeof runValue === 'object' && !Array.isArray(runValue) ? runValue : {};
+          const selected = Array.isArray(selectedValue) ? selectedValue : [];
+          const matrix = matrixValue && typeof matrixValue === 'object' && !Array.isArray(matrixValue) ? matrixValue : {};
+          const needs = needsValue && typeof needsValue === 'object' && !Array.isArray(needsValue) ? needsValue : {};
+          if (process.env.PLAN_RESULT !== 'success') fail('planning job did not succeed');
+          if (!['planned', 'bypassed', 'fallback'].includes(process.env.PLAN_STATUS)) fail('invalid status');
+          if (!process.env.PLAN_TESTED_SHA || process.env.PLAN_TESTED_SHA !== process.env.EXPECTED_TESTED_SHA) fail('tested-sha is not the event SHA');
+          const runKeysValid = runValue !== null && typeof runValue === 'object' && !Array.isArray(runValue) && JSON.stringify(Object.keys(run).sort()) === JSON.stringify(expected);
+          const runValuesValid = expected.every((task) => typeof run[task] === 'boolean');
+          if (!runKeysValid || !runValuesValid) fail('run shape diverges from catalog');
+          const selectedShapeValid = Array.isArray(selectedValue) && selected.every((task) => typeof task === 'string' && expected.includes(task)) && new Set(selected).size === selected.length;
+          if (!selectedShapeValid || JSON.stringify(selected) !== JSON.stringify(sorted(selected)) || JSON.stringify(selected) !== JSON.stringify(expected.filter((task) => run[task] === true))) fail('selected is inconsistent with run');
+          if (!['true', 'false'].includes(process.env.PLAN_HAS_TASKS ?? '') || (process.env.PLAN_HAS_TASKS === 'true') !== (selected.length > 0)) fail('has-tasks is inconsistent');
+          const matrixItems = Array.isArray(matrix.include) ? matrix.include : [];
+          const matrixShapeValid = JSON.stringify(Object.keys(matrix).sort()) === '["include"]' && Array.isArray(matrix.include) && matrixItems.every((item) => item && typeof item === 'object' && !Array.isArray(item) && JSON.stringify(Object.keys(item).sort()) === '["task"]' && typeof item.task === 'string' && expected.includes(item.task)) && new Set(matrixItems.map((item) => item.task)).size === matrixItems.length;
+          if (!matrixShapeValid || JSON.stringify(matrixItems.map((item) => item.task)) !== JSON.stringify(selected)) fail('matrix is inconsistent with selected');
+          const alwaysTasks = process.env.EXPECTED_ALWAYS.split(',').filter(Boolean);
+          if (alwaysTasks.some((task) => run[task] !== true)) fail('mandatory task was rejected');
+          if (['bypassed', 'fallback'].includes(process.env.PLAN_STATUS ?? '') && expected.some((task) => run[task] !== true)) fail('bypassed or fallback plan must select every task');
+          for (const edge of process.env.EXPECTED_DEPENDENCIES.split(';').filter(Boolean)) {
+            const [task, dependency] = edge.split('=');
+            if (run[task] === true && run[dependency] !== true) fail(`${task} is selected without dependency ${dependency}`);
+          }
+          if (JSON.stringify(expectedNeeds) !== JSON.stringify(Object.keys(needs ?? {}).sort())) fail('final needs IDs diverge from declared jobs');
+          for (const task of expected) {
+            const result = needs[task]?.result;
+            if (run[task] === true && result !== 'success') fail(`selected ${task} result is ${result ?? 'missing'}`);
+          }
+          NODE
