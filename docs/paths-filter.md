@@ -46,7 +46,7 @@ Keep the selector in a dedicated planning job with `contents: read`, without che
 - name: Plan this pull request
   id: select
   if: ${{ github.event_name == 'pull_request' }}
-  uses: guilhem/jev-ci-selector@0e7f208c4c84124dba86f3953c8b60ddf45afe24
+  uses: guilhem/jev-ci-selector@5ae911f413054938f714f3c6f0eefbe2e3c33c7a
   with:
     mode: shadow
     api-key: ${{ secrets.JEV_API_KEY }}

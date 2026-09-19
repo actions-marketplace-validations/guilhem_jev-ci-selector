@@ -16,7 +16,7 @@ Copy these three files into your repository:
 
 The example uses Go, Helm, and the consumer-owned scripts `./ci/e2e-network.sh` and `./ci/e2e-upgrade.sh`. Adapt their commands and tool setup. Each matrix task must prepare and build its own prerequisites: the `build` entry does not supply artifacts or ordering to the e2e entries.
 
-The action is pinned to `guilhem/jev-ci-selector@0e7f208c4c84124dba86f3953c8b60ddf45afe24`, a published commit containing the bundle. Keep a reviewed full SHA when updating it. The standalone validator needs no npm installation; the `ci-contract` job installs Node.js 24.
+The action is pinned to `guilhem/jev-ci-selector@5ae911f413054938f714f3c6f0eefbe2e3c33c7a`, a published commit containing the bundle. Keep a reviewed full SHA when updating it. The standalone validator needs no npm installation; the `ci-contract` job installs Node.js 24.
 
 Merge the catalog into the base branch before analyzing PRs, and keep `mode: shadow`. The example's `allow-external-context: 'true'` authorizes sending the diff, changed paths, SHAs, and task questions to TypeSafe when `JEV_API_KEY` is configured. Remove the opt-in if that transfer is not approved.
 
