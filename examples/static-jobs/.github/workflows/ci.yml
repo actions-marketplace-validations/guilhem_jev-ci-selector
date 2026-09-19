@@ -26,8 +26,8 @@ jobs:
       - name: Select pull request tasks
         id: select
         if: ${{ github.event_name == 'pull_request' }}
-        # Placeholder: replace with the published OWNER/jev-ci-selector full SHA.
-        uses: OWNER/jev-ci-selector@0000000000000000000000000000000000000000
+        # Reviewed distribution commit; keep a full SHA when upgrading.
+        uses: guilhem/jev-ci-selector@0e7f208c4c84124dba86f3953c8b60ddf45afe24
         with:
           config: .github/ci-selector.yml
           mode: shadow

@@ -105,7 +105,7 @@ test('example catalogs and workflow job IDs have one stable contract', () => {
     assert.ok(jobs.plan.steps.every((step: Record<string, unknown>) => !('uses' in step && String(step.uses).startsWith('actions/checkout@'))), 'planning must not checkout PR code');
     const selector = jobs.plan.steps.find((step: Record<string, unknown>) => step.id === 'select') as Record<string, any>;
     assert.equal(selector.if, "${{ github.event_name == 'pull_request' }}");
-    assert.equal(selector.uses, 'OWNER/jev-ci-selector@0000000000000000000000000000000000000000');
+    assert.equal(selector.uses, 'guilhem/jev-ci-selector@0e7f208c4c84124dba86f3953c8b60ddf45afe24');
     assert.deepEqual(selector.with, {
       config: '.github/ci-selector.yml',
       mode: 'shadow',

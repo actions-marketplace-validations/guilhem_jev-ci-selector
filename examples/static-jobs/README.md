@@ -1,31 +1,48 @@
-# Static jobs example
+# Keep your existing CI jobs
 
-Copy `.github/ci-selector.yml` and `.github/workflows/ci.yml` into a Go and
-Helm repository that provides the commands referenced by the workflow. The
-workflow is an illustrative consumer: `./ci/e2e-network.sh` and
-`./ci/e2e-upgrade.sh` are expected to be supplied by that repository.
-Also copy the bundled `dist/validate.cjs` from this project to
-`.github/ci-selector-validate.cjs` in the consumer. It includes its dependencies.
+[← Back to the README](../../README.md) · [Workflow](.github/workflows/ci.yml) · [Catalog](.github/ci-selector.yml)
 
-Before enabling it, replace the visibly documented
-`OWNER/jev-ci-selector@0000000000000000000000000000000000000000` placeholder
-with the reviewed immutable action SHA. Set `JEV_API_KEY` only when
-the diff, paths, and task questions may be sent to TypeSafe; this is an
-explicit authorization decision.
+Use this integration when your checks are separate jobs with their own setup, or when one task depends on another. The example models a Go and Helm project with `build`, `lint`, `unit`, `helm`, `e2e_network`, and `e2e_upgrade`.
 
-The selector runs only for `pull_request`. Push, schedule, and merge-group
-events synthesize a full plan without invoking semantic selection. Every PR
-consumer checks out `tested-sha` (the merge commit supplied by GitHub).
+## Install the example
 
-Run `node examples/validate.mjs examples/static-jobs` from the repository root
-to check the catalog, job IDs, final `needs`, and dependency wiring. Run the
-repository integration tests with `npm test`. They parse this
-catalog and workflow, check task/dependency parity, and execute the inline
-`ci-required` gate against malformed plans, empty selections, skipped
-selections, dependency failures, and job divergence.
+Copy these three files into your repository:
 
-The supplied mandatory `lint` job runs `node .github/ci-selector-validate.cjs .`
-before linting. Its failure blocks `ci-required`; missing or unknown workflow
-jobs therefore cannot disappear silently. Keep this step and `lint.always: true`.
-The validator stays outside the planning job. Go, Helm and any cluster tooling
-used by the consumer-owned e2e scripts must be installed by your normal task setup.
+| From this project | Destination in your repository |
+| --- | --- |
+| [Task catalog](.github/ci-selector.yml) | `.github/ci-selector.yml` |
+| [Workflow](.github/workflows/ci.yml) | `.github/workflows/ci.yml` |
+| [Bundled validator](../../dist/validate.cjs) | `.github/ci-selector-validate.cjs` |
+
+Adapt the commands and tool setup to your project before enabling the workflow. The e2e scripts `./ci/e2e-network.sh` and `./ci/e2e-upgrade.sh` belong to the consuming repository. Install Go, Helm, and any cluster tools through your normal job setup. The validator includes its dependencies and requires Node.js 24; the example installs that runtime in `lint`.
+
+The action is pinned to `guilhem/jev-ci-selector@0e7f208c4c84124dba86f3953c8b60ddf45afe24`, a published commit containing the bundle. Keep a reviewed full SHA when updating it.
+
+Merge the catalog into your base branch before analyzing PRs. Keep `mode: shadow`. Add `JEV_API_KEY` only after approving external context transfer: the example's `allow-external-context: 'true'` sends the diff, changed paths, SHAs, and task questions to TypeSafe. Remove that opt-in to keep every task without a Jev call.
+
+## How it fits together
+
+The selector runs only on `pull_request`. Push, scheduled, and merge-group events produce a full plan without invoking the action. Each consumer checks out `tested-sha`, the merge commit supplied by the PR event.
+
+The network and upgrade jobs declare `needs: [plan, build]`, matching their catalog dependencies. A selected job requires a successful plan and any real prerequisites before running. The planning job never checks out or executes PR code.
+
+The mandatory `lint` job runs `node .github/ci-selector-validate.cjs .` before linting. Keep that step and `lint.always: true`: they detect catalog/workflow drift, including missing or newly unknown jobs. When adding a task, update the catalog, job, dependencies, full-plan task list, and final gate together.
+
+Make **`ci-required` a required status check** in your branch rule or ruleset. It checks the plan and every selected job result. Before relying on it, exercise a failing planner and a selected task that fails or is skipped; the final check must fail.
+
+## Validate your changes
+
+In your consumer repository, run the bundled contract validator:
+
+```sh
+node .github/ci-selector-validate.cjs .
+```
+
+In this project's checkout, validate the supplied example and its regression cases:
+
+```sh
+node examples/validate.mjs examples/static-jobs
+npm test
+```
+
+The tests check task/job parity, dependencies, malformed plans, skipped selected jobs, and final-gate failures. [Full action reference →](../../docs/reference.md)
