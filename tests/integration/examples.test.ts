@@ -27,7 +27,9 @@ function gateScript(workflow: Record<string, any>): string {
 function planEnv(tasks: string[], selected: string[], result: string = 'success') {
   const run = Object.fromEntries(tasks.map((task) => [task, selected.includes(task)]));
   const matrix = { include: selected.map((task) => ({ task })) };
-  const needs: Record<string, { result: string }> = { plan: { result } };
+  const needs: Record<string, { result: string; outputs?: Record<string, string> }> = {
+    plan: { result, outputs: Object.fromEntries(tasks.map(task => [task, String(run[task])])) },
+  };
   for (const task of tasks) needs[task] = { result: selected.includes(task) ? 'success' : 'skipped' };
   return {
     EXPECTED_TASKS: tasks.join(','),
@@ -124,6 +126,9 @@ test('example catalogs and workflow job IDs have one stable contract', () => {
       for (const task of tasks) {
         const needs = Array.isArray(jobs[task].needs) ? jobs[task].needs : [jobs[task].needs];
         assert.ok(needs.includes('plan'), `${task} must depend on plan`);
+        assert.equal(jobs.plan.outputs[task], `\${{ github.event_name == 'pull_request' && steps.select.outputs.${task} || steps.full.outputs.${task} }}`);
+        assert.match(String(jobs[task].if), new RegExp(`needs\\.plan\\.outputs\\.${task} == ['"]true['"]`));
+        assert.doesNotMatch(String(jobs[task].if), /fromJSON\(needs\.plan\.outputs\.run\)/);
         for (const dependency of catalog.tasks[task]?.requires ?? []) assert.ok(needs.includes(dependency), `${task} must depend on ${dependency}`);
       }
       assert.match(jobs['ci-required'].env.NEEDS_JSON, /toJSON\(needs\)/);
@@ -165,10 +170,9 @@ test('static ci-required rejects planner, plan-shape, selected-job, and dependen
   assert.notEqual(runGate(workflow, malformed).status, 0, 'malformed plan must fail the gate');
 
   const selectedSkipped = planEnv(tasks, all);
-  selectedSkipped.NEEDS_JSON = JSON.stringify({
-    plan: { result: 'success' },
-    ...Object.fromEntries(tasks.map((task) => [task, { result: task === 'build' ? 'skipped' : 'success' }])),
-  });
+  const skippedNeeds = JSON.parse(selectedSkipped.NEEDS_JSON);
+  skippedNeeds.build.result = 'skipped';
+  selectedSkipped.NEEDS_JSON = JSON.stringify(skippedNeeds);
   assert.notEqual(runGate(workflow, selectedSkipped).status, 0, 'a selected skipped job must fail the gate');
 
   const dependency = planEnv(tasks, ['e2e_network']);
@@ -183,6 +187,18 @@ test('static ci-required rejects planner, plan-shape, selected-job, and dependen
   const invalidBoolean = planEnv(tasks, ['build', 'lint', 'unit']);
   invalidBoolean.PLAN_RUN = JSON.stringify({ ...JSON.parse(invalidBoolean.PLAN_RUN), helm: 'false' });
   assert.notEqual(runGate(workflow, invalidBoolean).status, 0, 'run values must be booleans');
+
+  const namedMismatch = planEnv(tasks, ['build', 'lint', 'unit']);
+  const mismatchedNeeds = JSON.parse(namedMismatch.NEEDS_JSON);
+  mismatchedNeeds.plan.outputs.helm = 'true';
+  namedMismatch.NEEDS_JSON = JSON.stringify(mismatchedNeeds);
+  assert.notEqual(runGate(workflow, namedMismatch).status, 0, 'named task output must agree with aggregate run');
+
+  const namedMalformed = planEnv(tasks, ['build', 'lint', 'unit']);
+  const malformedNeeds = JSON.parse(namedMalformed.NEEDS_JSON);
+  malformedNeeds.plan.outputs.helm = '1';
+  namedMalformed.NEEDS_JSON = JSON.stringify(malformedNeeds);
+  assert.notEqual(runGate(workflow, namedMalformed).status, 0, 'named task output must be an exact boolean string');
 
   const invalidHasTasks = planEnv(tasks, ['build', 'lint', 'unit']);
   invalidHasTasks.PLAN_HAS_TASKS = 'garbage';
@@ -237,6 +253,7 @@ test('standalone consumer validator catches unknown jobs, incomplete final needs
     for (const name of examples) assert.equal(check(name).status, 0, 'validator works at any consumer path');
     assert.notEqual(check('static-jobs', workflow => { workflow.jobs.unknown = { needs: 'plan' }; }).status, 0);
     assert.notEqual(check('matrix', workflow => { workflow.jobs.unknown = { needs: 'plan' }; }).status, 0);
+    assert.notEqual(check('static-jobs', workflow => { workflow.jobs.plan.outputs.helm = workflow.jobs.plan.outputs.unit; }).status, 0);
     assert.notEqual(check('static-jobs', workflow => {
       workflow.jobs['ci-required'].needs = workflow.jobs['ci-required'].needs.filter((id: string) => id !== 'helm');
       workflow.jobs['ci-required'].env.EXPECTED_NEEDS = workflow.jobs['ci-required'].env.EXPECTED_NEEDS.replace('helm,', '');
@@ -248,4 +265,28 @@ test('standalone consumer validator catches unknown jobs, incomplete final needs
       workflow.jobs['ci-required'].env.EXPECTED_TASKS = Object.keys(catalog.tasks).sort().join(',');
     }).status, 0);
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('static non-PR full-plan step emits every named output consistently with its aggregate plan', () => {
+  const workflow = readWorkflow('static-jobs');
+  const tasks = taskIds(readCatalog('static-jobs'));
+  const step = workflow.jobs.plan.steps.find((candidate: Record<string, unknown>) => candidate.id === 'full');
+  const script = String(step.run).split("node <<'NODE'\n")[1]!.split('\nNODE')[0]!;
+  let output = '';
+  vm.runInNewContext(script, {
+    process: { env: { GITHUB_OUTPUT: 'output', TESTED_SHA: 'a'.repeat(40) } },
+    require: (name: string) => {
+      assert.equal(name, 'node:fs');
+      return { appendFileSync: (path: string, data: string) => { assert.equal(path, 'output'); output += data; } };
+    },
+  });
+  const outputs = Object.fromEntries(output.trim().split('\n').map(line => {
+    const separator = line.indexOf('='); return [line.slice(0, separator), line.slice(separator + 1)];
+  }));
+  for (const task of tasks) assert.equal(outputs[task], 'true');
+  assert.deepEqual(JSON.parse(outputs.run!), Object.fromEntries(tasks.map(task => [task, true])));
+  assert.deepEqual(JSON.parse(outputs.selected!), tasks);
+  assert.deepEqual(JSON.parse(outputs.matrix!), { include: tasks.map(task => ({ task })) });
+  assert.equal(outputs.status, 'bypassed'); assert.equal(outputs['has-tasks'], 'true');
+  assert.equal(outputs['tested-sha'], 'a'.repeat(40));
 });

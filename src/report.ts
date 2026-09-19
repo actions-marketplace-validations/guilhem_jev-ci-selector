@@ -28,6 +28,7 @@ export function actionOutputs(plan: ExecutionPlan, testedSha: string, reportPath
   return {
     run: JSON.stringify(plan.run), selected: JSON.stringify(plan.selected), matrix: JSON.stringify(plan.matrix),
     'has-tasks': String(plan.hasTasks), status: plan.status, 'tested-sha': testedSha, 'report-path': reportPath,
+    ...Object.fromEntries(Object.keys(plan.run).sort().map(id => [id, String(plan.run[id])])),
   };
 }
 export function summary(report: Report): string {

@@ -24,6 +24,8 @@ Merge the catalog into the base branch before analyzing PRs, and keep `mode: sha
 
 Only `pull_request` invokes the selector. Push, scheduled, and merge-group events produce a full plan. Consumers check out the plan's `tested-sha`.
 
+The matrix launcher uses the aggregate `matrix` output. Named action outputs remain available for consumers with separate jobs; the [static example](../static-jobs/README.md) shows how to forward them.
+
 The mandatory `ci-contract` job checks the catalog and workflow at that SHA, including when the selected matrix is empty. The matrix and final gate both require its success. Keep validation outside the planning job.
 
 The launcher uses a fixed task allowlist and rejects unsupported IDs. Keep it, the catalog, the full-plan task list, and the final gate in sync. The catalog intentionally has no `requires`: matrix entries cannot order or satisfy one another's prerequisites.
@@ -48,3 +50,5 @@ npm test
 ```
 
 The tests check catalog/launcher consistency and run the final gate against invalid plans, skipped matrices, empty selections, and matrix failures. [Full action reference →](../../docs/reference.md)
+
+For a `paths-filter` migration, keep only narrow must-run cases in `force_paths` (the example uses a chart values schema path). Put the broader behavioral scope in each task's question. See [the migration guide](../../docs/paths-filter.md).

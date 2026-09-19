@@ -18,7 +18,35 @@ test('report schema covers every deterministic reason and rejects arbitrary publ
   assert.throws(() => validateReport({ ...report, tasks: { unit: { ...plan.tasks.unit, reasons: ['generated explanation'] } } }));
   assert.match(summary(report), /missing-api-key/);
   const outputs = actionOutputs(plan, report.tested_sha, '/tmp/report.json');
-  assert.deepEqual(Object.keys(outputs), ['run', 'selected', 'matrix', 'has-tasks', 'status', 'tested-sha', 'report-path']);
+  assert.deepEqual(Object.keys(outputs), ['run', 'selected', 'matrix', 'has-tasks', 'status', 'tested-sha', 'report-path', 'build', 'e2e', 'helm', 'prepare', 'unit']);
   assert.ok(Object.values(JSON.parse(outputs.run!)).every(value => value === true));
   assert.ok(Object.values(plan.tasks).every(task => task.probability === null && task.proposed_run === null));
+});
+
+test('named task outputs use effective string booleans for selection, dependencies, shadow and degradation', () => {
+  const value = catalog();
+  const probabilities = { helm: 0, e2e: 1, build: 0, prepare: 0 };
+  const cases = [
+    selectTasks({ catalog: value, changedPaths: [], probabilities, mode: 'enforce' }),
+    selectTasks({ catalog: value, changedPaths: [], probabilities, mode: 'shadow' }),
+    selectTasks({ catalog: value, changedPaths: [], mode: 'enforce', forceAllReason: { status: 'bypassed', code: 'force-all' } }),
+    selectTasks({ catalog: value, changedPaths: [], probabilities: {}, mode: 'enforce' }),
+  ];
+  for (const plan of cases) {
+    const outputs = actionOutputs(plan, 'a'.repeat(40), '/tmp/report.json');
+    assert.equal(outputs.unit, 'true');
+    assert.equal(outputs.e2e, 'true');
+    assert.equal(outputs.build, 'true');
+    assert.equal(outputs.prepare, 'true');
+    assert.equal(outputs.helm, plan.mode === 'enforce' && plan.status === 'planned' ? 'false' : 'true');
+    for (const [id, effective] of Object.entries(JSON.parse(outputs.run!))) {
+      assert.equal(outputs[id], String(effective), `named output disagrees with run: ${id}`);
+    }
+    assert.deepEqual(Object.keys(outputs).slice(7), ['build', 'e2e', 'helm', 'prepare', 'unit']);
+  }
+  const empty = selectTasks({ catalog: { ...value, tasks: {} }, changedPaths: [], mode: 'enforce' });
+  const outputs = actionOutputs(empty, 'a'.repeat(40), '/tmp/report.json');
+  assert.equal(outputs['has-tasks'], 'false');
+  assert.deepEqual(JSON.parse(outputs.selected!), []);
+  assert.equal(Object.keys(outputs).length, 7);
 });

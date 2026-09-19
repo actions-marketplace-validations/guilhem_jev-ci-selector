@@ -33969,7 +33969,7 @@ var config_schema_default = {
     taskId: {
       type: "string",
       pattern: "^[A-Za-z_][A-Za-z0-9_-]{0,63}$",
-      not: { enum: ["__proto__", "prototype", "constructor", "toString", "toLocaleString", "valueOf", "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable", "__defineGetter__", "__defineSetter__", "__lookupGetter__", "__lookupSetter__", "plan", "ci-required", "ci-contract", "tasks"] }
+      not: { enum: ["__proto__", "prototype", "constructor", "toString", "toLocaleString", "valueOf", "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable", "__defineGetter__", "__defineSetter__", "__lookupGetter__", "__lookupSetter__", "plan", "ci-required", "ci-contract", "tasks", "run", "selected", "matrix", "has-tasks", "status", "tested-sha", "report-path"] }
     },
     paths: {
       type: "array",
@@ -33981,7 +33981,7 @@ var config_schema_default = {
       additionalProperties: false,
       properties: {
         always: { type: "boolean" },
-        run_if_paths: { $ref: "#/definitions/paths" },
+        force_paths: { $ref: "#/definitions/paths", description: "A matching path forces this task to run; the question defines its semantic scope." },
         requires: { type: "array", uniqueItems: true, items: { $ref: "#/definitions/taskId" } },
         question: { type: "string", minLength: 1, pattern: "\\S" }
       },
@@ -33998,10 +33998,17 @@ var ConfigError = class extends Error {
     super("invalid-catalog");
   }
 };
+var reservedTaskIds = new Set(config_schema_default.definitions.taskId.not.enum.map((id) => id.toLowerCase()));
 var validate = new import_ajv.default({ allErrors: true, strict: true }).compile(config_schema_default);
 function validateCatalog(value) {
   if (!validate(value)) throw new ConfigError();
   const catalog = value;
+  const outputIds = /* @__PURE__ */ new Set();
+  for (const id of Object.keys(catalog.tasks)) {
+    const outputId = id.toLowerCase();
+    if (reservedTaskIds.has(outputId) || outputIds.has(outputId)) throw new ConfigError();
+    outputIds.add(outputId);
+  }
   const visited = /* @__PURE__ */ new Set();
   const active = /* @__PURE__ */ new Set();
   function visit(id) {
@@ -37005,7 +37012,7 @@ function deterministic(catalog, paths) {
     const task = catalog.tasks[id];
     reasons[id] = [];
     if (task.always) reasons[id].push("always");
-    if (paths.some((path2) => matches(path2, task.run_if_paths ?? []))) reasons[id].push("path-match");
+    if (paths.some((path2) => matches(path2, task.force_paths ?? []))) reasons[id].push("path-match");
   }
   closeDependencies(catalog, new Set(Object.keys(reasons).filter((id) => reasons[id].length)), reasons);
   return reasons;
@@ -37179,7 +37186,8 @@ function actionOutputs(plan, testedSha, reportPath) {
     "has-tasks": String(plan.hasTasks),
     status: plan.status,
     "tested-sha": testedSha,
-    "report-path": reportPath
+    "report-path": reportPath,
+    ...Object.fromEntries(Object.keys(plan.run).sort().map((id) => [id, String(plan.run[id])]))
   };
 }
 function summary(report) {

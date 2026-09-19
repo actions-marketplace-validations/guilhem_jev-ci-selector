@@ -16,20 +16,16 @@ tasks:
     always: true
   e2e_network:
     question: Does this change affect network end-to-end behavior?
-    run_if_paths:
-      - pkg/network/**
     requires:
       - build
   e2e_upgrade:
     question: Does this change affect the upgrade path?
-    run_if_paths:
-      - internal/upgrade/**
     requires:
       - build
   helm:
     question: Does this change affect a Helm chart?
-    run_if_paths:
-      - charts/**
+    force_paths:
+      - charts/**/values.schema.json
   lint:
     always: true
   unit:

@@ -15,6 +15,7 @@
   <a href="#quick-start">Quick start</a> ·
   <a href="examples/static-jobs/README.md">Static jobs</a> ·
   <a href="examples/matrix/README.md">Matrix example</a> ·
+  <a href="docs/paths-filter.md">Migrate from paths-filter</a> ·
   <a href="docs/reference.md">Reference</a> ·
   <a href="SECURITY.md">Security</a>
 </p>
@@ -82,13 +83,24 @@ tasks:
 
   helm:
     requires: [build]
-    run_if_paths: ["charts/**"]
+    force_paths: ["charts/**/values.schema.json"]
     question: >
       Does this change affect Helm chart rendering, default values,
       configuration validation, or generated Kubernetes manifests?
 ```
 
-`unit` and `build` always run. A change under `charts/` also forces `helm`; other changes leave it eligible for Jev's assessment. Selecting `helm` includes its `build` dependency. Ask whether a change **affects the scope**, rather than whether a test will fail.
+`unit` and `build` always run. A change to a chart values schema also forces `helm`; other changes leave it eligible for Jev's assessment. Selecting `helm` includes its `build` dependency. Ask whether a change **affects the scope**, rather than whether a test will fail.
+
+Every catalog task also has a direct action output with the same ID. It is the exact string `true` or `false`, so a static job can use its own output without parsing the aggregate map. This job excerpt keeps the build dependency declared above:
+
+```yaml
+jobs:
+  helm:
+    needs: [plan, build]
+    if: ${{ always() && needs.plan.result == 'success' && needs.build.result == 'success' && needs.plan.outputs.helm == 'true' }}
+```
+
+The planning job should publish that named output from both the pull request selector and the full non-PR plan. Keep the aggregate `run`, `selected`, `matrix`, `has-tasks`, `status`, and `tested-sha` outputs for gates and matrix consumers; `report-path` stays local to the planning runner. See [Migrate from paths-filter](docs/paths-filter.md) for the output and semantics change.
 
 This small catalog illustrates the format; the complete templates include more tasks. Match your catalog to your workflow, and merge it into the base branch before the first PR you want to analyze. The selector reads that trusted base version.
 

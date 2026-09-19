@@ -1,6 +1,6 @@
 # Action reference
 
-[← Back to the README](../README.md) · [Shadow mode guide](shadow-mode.md) · [Security](../SECURITY.md)
+[← Back to the README](../README.md) · [Shadow mode guide](shadow-mode.md) · [paths-filter migration](paths-filter.md) · [Security](../SECURITY.md)
 
 `jev-ci-selector` produces a CI task selection plan. It does not execute tasks, generate commands, discover tests, or create a dynamic GitHub Actions job graph. Consumers own runners, secrets, commands, and execution order.
 
@@ -21,7 +21,7 @@ Boolean inputs accept only `true` and `false`. Quote them as strings in workflow
 
 ## Outputs
 
-All output values are strings. Parse JSON outputs with `fromJSON(...)` in GitHub Actions expressions. Task keys and arrays use stable identifier order.
+All output values are strings. Parse JSON outputs with `fromJSON(...)` in GitHub Actions expressions. Task keys and arrays use stable identifier order. Every catalog task also has a direct output named after its task ID. Direct task outputs are the exact strings `true` or `false` and equal the corresponding effective value in `run`.
 
 | Output | Content |
 | --- | --- |
@@ -32,8 +32,9 @@ All output values are strings. Parse JSON outputs with `fromJSON(...)` in GitHub
 | `status` | `planned`, `bypassed`, or `fallback` |
 | `tested-sha` | Immutable commit that consumer jobs must test |
 | `report-path` | Local path to the detailed JSON report on the planning runner |
+| `<task-id>` | Exact string `true` or `false` for that task's effective run decision |
 
-In `shadow`, `run`, `selected`, and `matrix` always include every task, even when the proposal is empty. The hypothetical selection appears only in `tasks.*.proposed_run` in the report.
+In `shadow`, every direct task output is `"true"`, every `run` value is `true`, and `selected` and `matrix` include every task, even when the proposal is empty. Bypassed and fallback plans also set every task to `true`. The hypothetical selection appears only in `tasks.*.proposed_run` in the report.
 
 `enforce` applies the selection after adding mandatory tasks and transitive dependencies. Changing to this mode is an explicit consumer decision.
 
@@ -44,12 +45,12 @@ The [JSON Schema](../schemas/config.schema.json) defines the complete format. Ve
 | Field | Effect |
 | --- | --- |
 | `always: true` | Keep this task regardless of Jev's assessment |
-| `run_if_paths` | Keep the task when any changed path matches; no match leaves it eligible for semantic evaluation |
+| `force_paths` | Keep the task when any changed path matches; a match is mandatory and no match leaves it eligible for semantic evaluation |
 | `requires` | Include these tasks, transitively, whenever this task is selected |
 | `question` | Ask whether the change affects the functional scope covered by the task |
 | `force_all_paths` | Top-level patterns that force every task when matched |
 
-Every task without `always: true` needs a nonempty question. Questions describe affected behavior, rather than predicting test failures. Dependencies already required by deterministic rules do not consume Jev questions.
+Every task without `always: true` needs a nonempty question. Questions describe affected behavior, rather than predicting test failures. Use `force_paths` only for narrow, deterministic must-run cases; broad copied path globs can make semantic evaluation irrelevant. Dependencies already required by deterministic rules do not consume Jev questions. The earlier pre-adoption name `run_if_paths` is rejected; use `force_paths`.
 
 An optional task may be excluded only when its probability is **strictly below** `skip_below`. Equality keeps the task. The initial `0.05` value is experimental and does not guarantee an error rate.
 
@@ -61,7 +62,7 @@ The exact configured catalog path and every path under `.github/workflows/` alwa
 
 ### Validation
 
-Duplicate YAML keys, aliases, unknown properties, nonexistent or cyclic dependencies, and tasks without a usable rule are rejected. Identifiers follow `[A-Za-z_][A-Za-z0-9_-]{0,63}`. Reserved IDs include `plan`, `ci-required`, `ci-contract`, `tasks`, `prototype`, and names inherited from `Object.prototype`; the schema lists them all.
+Duplicate YAML keys, aliases, unknown properties, nonexistent or cyclic dependencies, and tasks without a usable rule are rejected. Identifiers follow `[A-Za-z_][A-Za-z0-9_-]{0,63}`. Task IDs must be unique case-insensitively and cannot collide case-insensitively with another task, any standard output (`run`, `selected`, `matrix`, `has-tasks`, `status`, `tested-sha`, or `report-path`), or the existing reserved IDs such as `plan`, `ci-required`, `ci-contract`, `tasks`, and `prototype`; the schema lists the static reserved names.
 
 An empty catalog is valid and produces `has-tasks: 'false'`. A missing, unreadable, or invalid catalog is a planner failure, because the action cannot identify what “all tasks” means.
 

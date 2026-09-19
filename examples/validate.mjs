@@ -25,6 +25,11 @@ if (!Object.hasOwn(jobs, 'tasks')) {
   for (const task of tasks) {
     const taskNeeds = Array.isArray(jobs[task].needs) ? jobs[task].needs : [jobs[task].needs];
     assert.ok(taskNeeds.includes('plan'), `${task} must need plan`);
+    assert.equal(
+      jobs.plan.outputs[task],
+      `\${{ github.event_name == 'pull_request' && steps.select.outputs.${task} || steps.full.outputs.${task} }}`,
+      `${task} must be published from the selector or full plan`,
+    );
     for (const dependency of catalog.tasks[task].requires ?? []) assert.ok(taskNeeds.includes(dependency), `${task} must need ${dependency}`);
   }
 } else {

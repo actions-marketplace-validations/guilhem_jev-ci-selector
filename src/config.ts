@@ -4,7 +4,7 @@ import schema from '../schemas/config.schema.json';
 
 export interface Task {
   always?: boolean;
-  run_if_paths?: string[];
+  force_paths?: string[];
   requires?: string[];
   question?: string;
 }
@@ -20,11 +20,19 @@ export class ConfigError extends Error {
   constructor() { super('invalid-catalog'); }
 }
 
+const reservedTaskIds = new Set(schema.definitions.taskId.not.enum.map(id => id.toLowerCase()));
 const validate = new Ajv({ allErrors: true, strict: true }).compile<Catalog>(schema);
 
 export function validateCatalog(value: unknown): asserts value is Catalog {
   if (!validate(value)) throw new ConfigError();
   const catalog = value;
+  // GitHub step outputs use case-insensitive keys. Reject collisions before any plan exists.
+  const outputIds = new Set<string>();
+  for (const id of Object.keys(catalog.tasks)) {
+    const outputId = id.toLowerCase();
+    if (reservedTaskIds.has(outputId) || outputIds.has(outputId)) throw new ConfigError();
+    outputIds.add(outputId);
+  }
   const visited = new Set<string>();
   const active = new Set<string>();
   function visit(id: string): void {

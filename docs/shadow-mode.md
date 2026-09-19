@@ -1,8 +1,10 @@
 # Learn from shadow mode
 
-[← Back to the README](../README.md) · [Action reference](reference.md)
+[← Back to the README](../README.md) · [Action reference](reference.md) · [paths-filter migration](paths-filter.md)
 
 Shadow mode answers a practical question: **what would this policy have skipped, and what happened when those tasks actually ran?** All effective outputs remain complete, so you can collect evidence before changing execution.
+
+The direct output for every task is the exact string `"true"` in shadow mode; the aggregate `run` map contains boolean `true` values. Only the report records the hypothetical proposal. Unless an `always` or `force_paths` rule or a required dependency fixes the decision, the task remains eligible for Jev regardless of which paths changed. Bypassed and fallback plans also keep every task.
 
 ## Collect a matched pair
 

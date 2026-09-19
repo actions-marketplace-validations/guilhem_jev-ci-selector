@@ -13,25 +13,15 @@ force_all_paths:
 tasks:
   build:
     question: Does this change affect compiled Go packages?
-    run_if_paths:
-      - cmd/**
   e2e_network:
     question: Does this change affect network end-to-end behavior?
-    run_if_paths:
-      - pkg/network/**
   e2e_upgrade:
     question: Does this change affect the upgrade path?
-    run_if_paths:
-      - internal/upgrade/**
   helm:
     question: Does this change affect a Helm chart?
-    run_if_paths:
-      - charts/**
+    force_paths:
+      - charts/**/values.schema.json
   lint:
     question: Does this change affect Go source or static-analysis configuration?
-    run_if_paths:
-      - internal/**
   unit:
     question: Does this change affect package behavior?
-    run_if_paths:
-      - pkg/**

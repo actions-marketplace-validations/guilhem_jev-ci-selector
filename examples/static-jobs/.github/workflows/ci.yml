@@ -22,6 +22,12 @@ jobs:
       has-tasks: ${{ github.event_name == 'pull_request' && steps.select.outputs.has-tasks || steps.full.outputs.has-tasks }}
       status: ${{ github.event_name == 'pull_request' && steps.select.outputs.status || steps.full.outputs.status }}
       tested-sha: ${{ github.event_name == 'pull_request' && steps.select.outputs.tested-sha || steps.full.outputs.tested-sha }}
+      build: ${{ github.event_name == 'pull_request' && steps.select.outputs.build || steps.full.outputs.build }}
+      e2e_network: ${{ github.event_name == 'pull_request' && steps.select.outputs.e2e_network || steps.full.outputs.e2e_network }}
+      e2e_upgrade: ${{ github.event_name == 'pull_request' && steps.select.outputs.e2e_upgrade || steps.full.outputs.e2e_upgrade }}
+      helm: ${{ github.event_name == 'pull_request' && steps.select.outputs.helm || steps.full.outputs.helm }}
+      lint: ${{ github.event_name == 'pull_request' && steps.select.outputs.lint || steps.full.outputs.lint }}
+      unit: ${{ github.event_name == 'pull_request' && steps.select.outputs.unit || steps.full.outputs.unit }}
     steps:
       - name: Select pull request tasks
         id: select
@@ -55,11 +61,12 @@ jobs:
           set('has-tasks', 'true');
           set('status', 'bypassed');
           set('tested-sha', process.env.TESTED_SHA);
+          for (const task of tasks) set(task, 'true');
           NODE
 
   build:
     needs: plan
-    if: ${{ always() && needs.plan.result == 'success' && fromJSON(needs.plan.outputs.run).build == true }}
+    if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.build == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -71,7 +78,7 @@ jobs:
 
   e2e_network:
     needs: [plan, build]
-    if: ${{ always() && needs.plan.result == 'success' && needs.build.result == 'success' && fromJSON(needs.plan.outputs.run).e2e_network == true }}
+    if: ${{ always() && needs.plan.result == 'success' && needs.build.result == 'success' && needs.plan.outputs.e2e_network == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -84,7 +91,7 @@ jobs:
 
   e2e_upgrade:
     needs: [plan, build]
-    if: ${{ always() && needs.plan.result == 'success' && needs.build.result == 'success' && fromJSON(needs.plan.outputs.run).e2e_upgrade == true }}
+    if: ${{ always() && needs.plan.result == 'success' && needs.build.result == 'success' && needs.plan.outputs.e2e_upgrade == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -96,7 +103,7 @@ jobs:
 
   helm:
     needs: plan
-    if: ${{ always() && needs.plan.result == 'success' && fromJSON(needs.plan.outputs.run).helm == true }}
+    if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.helm == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -108,7 +115,7 @@ jobs:
 
   lint:
     needs: plan
-    if: ${{ always() && needs.plan.result == 'success' && fromJSON(needs.plan.outputs.run).lint == true }}
+    if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.lint == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -126,7 +133,7 @@ jobs:
 
   unit:
     needs: plan
-    if: ${{ always() && needs.plan.result == 'success' && fromJSON(needs.plan.outputs.run).unit == true }}
+    if: ${{ always() && needs.plan.result == 'success' && needs.plan.outputs.unit == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -177,6 +184,9 @@ jobs:
           const runKeysValid = runValue !== null && typeof runValue === 'object' && !Array.isArray(runValue) && JSON.stringify(Object.keys(run).sort()) === JSON.stringify(expected);
           const runValuesValid = expected.every((task) => typeof run[task] === 'boolean');
           if (!runKeysValid || !runValuesValid) fail('run shape diverges from catalog');
+          const named = needs.plan?.outputs ?? {};
+          if (expected.some((task) => !['true', 'false'].includes(named[task]))) fail('named task outputs must be exact boolean strings');
+          if (expected.some((task) => (named[task] === 'true') !== run[task])) fail('named task outputs diverge from run');
           const selectedShapeValid = Array.isArray(selectedValue) && selected.every((task) => typeof task === 'string' && expected.includes(task)) && new Set(selected).size === selected.length;
           if (!selectedShapeValid || JSON.stringify(selected) !== JSON.stringify(sorted(selected)) || JSON.stringify(selected) !== JSON.stringify(expected.filter((task) => run[task] === true))) fail('selected is inconsistent with run');
           if (!['true', 'false'].includes(process.env.PLAN_HAS_TASKS ?? '') || (process.env.PLAN_HAS_TASKS === 'true') !== (selected.length > 0)) fail('has-tasks is inconsistent');

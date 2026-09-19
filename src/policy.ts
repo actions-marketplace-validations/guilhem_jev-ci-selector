@@ -47,7 +47,7 @@ function deterministic(catalog: Catalog, paths: string[]): Record<string, Reason
     const task = catalog.tasks[id]!;
     reasons[id] = [];
     if (task.always) reasons[id]!.push('always');
-    if (paths.some(path => matches(path, task.run_if_paths ?? []))) reasons[id]!.push('path-match');
+    if (paths.some(path => matches(path, task.force_paths ?? []))) reasons[id]!.push('path-match');
   }
   closeDependencies(catalog, new Set(Object.keys(reasons).filter(id => reasons[id]!.length)), reasons);
   return reasons;

@@ -25,6 +25,8 @@ inputs:
   max-diff-bytes:
     description: Maximum complete UTF-8 diff size; not a token count.
     default: '65536'
+# Every catalog task also publishes a dynamic output named after its ID.
+# Values are the effective 'true'/'false' strings (all true in shadow/bypass/fallback).
 outputs:
   run:
     description: JSON map from every catalog task ID to its effective boolean.

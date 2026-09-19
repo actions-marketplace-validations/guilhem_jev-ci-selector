@@ -19,7 +19,7 @@
     "taskId": {
       "type": "string",
       "pattern": "^[A-Za-z_][A-Za-z0-9_-]{0,63}$",
-      "not": { "enum": ["__proto__", "prototype", "constructor", "toString", "toLocaleString", "valueOf", "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable", "__defineGetter__", "__defineSetter__", "__lookupGetter__", "__lookupSetter__", "plan", "ci-required", "ci-contract", "tasks"] }
+      "not": { "enum": ["__proto__", "prototype", "constructor", "toString", "toLocaleString", "valueOf", "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable", "__defineGetter__", "__defineSetter__", "__lookupGetter__", "__lookupSetter__", "plan", "ci-required", "ci-contract", "tasks", "run", "selected", "matrix", "has-tasks", "status", "tested-sha", "report-path"] }
     },
     "paths": {
       "type": "array", "uniqueItems": true,
@@ -29,7 +29,7 @@
       "type": "object", "additionalProperties": false,
       "properties": {
         "always": { "type": "boolean" },
-        "run_if_paths": { "$ref": "#/definitions/paths" },
+        "force_paths": { "$ref": "#/definitions/paths", "description": "A matching path forces this task to run; the question defines its semantic scope." },
         "requires": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/definitions/taskId" } },
         "question": { "type": "string", "minLength": 1, "pattern": "\\S" }
       },

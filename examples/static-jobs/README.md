@@ -26,6 +26,8 @@ The selector runs only on `pull_request`. Push, scheduled, and merge-group event
 
 The network and upgrade jobs declare `needs: [plan, build]`, matching their catalog dependencies. A selected job requires a successful plan and any real prerequisites before running. The planning job never checks out or executes PR code.
 
+Each static job consumes its named plan output, for example `needs.plan.outputs.helm == 'true'`. The plan job publishes every catalog task from either `steps.select.outputs.<task>` or the non-PR full plan, where the full plan writes `true` for every task. The final gate compares those named strings with the aggregate `run` map, so a missing or incorrect mapping cannot silently skip a selected job. The aggregate outputs remain available for the gate and other consumers.
+
 The mandatory `lint` job runs `node .github/ci-selector-validate.cjs .` before linting. Keep that step and `lint.always: true`: they detect catalog/workflow drift, including missing or newly unknown jobs. When adding a task, update the catalog, job, dependencies, full-plan task list, and final gate together.
 
 Make **`ci-required` a required status check** in your branch rule or ruleset. It checks the plan and every selected job result. Before relying on it, exercise a failing planner and a selected task that fails or is skipped; the final check must fail.
@@ -46,3 +48,5 @@ npm test
 ```
 
 The tests check task/job parity, dependencies, malformed plans, skipped selected jobs, and final-gate failures. [Full action reference →](../../docs/reference.md)
+
+For a `paths-filter` migration, keep only narrow must-run cases in `force_paths` (the example uses a chart values schema path). Put the broader behavioral scope in each task's question. See [the migration guide](../../docs/paths-filter.md).
