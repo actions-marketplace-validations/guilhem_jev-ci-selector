@@ -2,33 +2,35 @@ import * as core from '@actions/core';
 import { readFile, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ConfigError } from './config.js';
-import { eventContext, planChange, type Inputs } from './planner.js';
+import { InputError, actionFailureMessage } from './input-error.js';
+import { eventContext, planChange, validateInputs, type Inputs } from './planner.js';
+import { parseSelectionInputs } from './tasks.js';
 import { actionOutputs, summary } from './report.js';
 import { manualContext } from './manual.js';
 
-function booleanInput(name: string): boolean {
+function booleanInput(name: 'allow-external-context' | 'force-all'): boolean {
   const value = core.getInput(name) || 'false';
-  if (value !== 'true' && value !== 'false') throw new Error('invalid-input');
+  if (value !== 'true' && value !== 'false') throw new InputError(name);
   return value === 'true';
 }
-function integerInput(name: string, defaultValue: number): number {
+function integerInput(name: 'timeout-ms' | 'max-diff-bytes', defaultValue: number): number {
   const value = core.getInput(name) || String(defaultValue);
-  if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value))) throw new Error('invalid-input');
+  if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value))) throw new InputError(name);
   return Number(value);
 }
 async function main(): Promise<void> {
-  const mode = core.getInput('mode') || 'shadow';
-  if (mode !== 'shadow' && mode !== 'enforce') throw new Error('invalid-input');
+  const mode = core.getInput('mode') || 'enforce';
+  if (mode !== 'shadow' && mode !== 'enforce') throw new InputError('mode');
   const testedRef = core.getInput('tested-ref') || 'merge';
-  if (testedRef !== 'head' && testedRef !== 'merge') throw new Error('invalid-input');
+  if (testedRef !== 'head' && testedRef !== 'merge') throw new InputError('tested-ref');
   const inputs: Inputs = {
-    config: core.getInput('config') || '.github/task-routing.yaml', mode, testedRef,
+    ...parseSelectionInputs(core.getInput), mode, testedRef,
     githubToken: core.getInput('github-token'), apiKey: core.getInput('api-key'),
     apiBaseUrl: core.getInput('api-base-url'), apiModel: core.getInput('api-model'),
     allowExternalContext: booleanInput('allow-external-context'), forceAll: booleanInput('force-all'),
     timeoutMs: integerInput('timeout-ms', 10000), maxDiffBytes: integerInput('max-diff-bytes', 65536),
   };
+  validateInputs(inputs);
   const event: unknown = JSON.parse(await readFile(process.env.GITHUB_EVENT_PATH!, 'utf8'));
   const pullRequest = core.getInput('pull-request');
   const context = pullRequest
@@ -46,6 +48,5 @@ async function main(): Promise<void> {
 }
 void main().catch(error => {
   // Error objects can carry HTTP bodies, source code, paths and credentials. Never log them.
-  core.setFailed(error instanceof ConfigError ? 'jev-ci-selector: catalog unavailable or invalid; no plan published.' :
-    'jev-ci-selector: planner failed; CI must reject this run.');
+  core.setFailed(actionFailureMessage(error));
 });
