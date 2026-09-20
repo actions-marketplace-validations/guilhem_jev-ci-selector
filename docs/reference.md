@@ -2,6 +2,18 @@
 
 The action selects tasks and publishes outputs. Workflows own execution, secrets, runners and ordering. There is one source of task definitions: the required inline `tasks` input.
 
+## Compatibility and versions
+
+The action follows Semantic Versioning. A major-version tag such as `v0` floats
+to the latest stable release of that major version. A prerelease publishes its
+exact tag only and never moves a floating tag. Pin a release commit when an
+immutable reference is required. A major version boundary covers changes to the
+input or output contract, the report version, or the default value of `mode`.
+
+The report version and canonical Jev model version evolve independently from the
+action version. Consumers that persist or analyze reports must validate the
+report version and upgrade their analyzer deliberately.
+
 ## Inputs
 
 GitHub passes strings. Validation and normalization precede Git or HTTP access, including manual PR resolution. Blank optional inputs use their defaults.
