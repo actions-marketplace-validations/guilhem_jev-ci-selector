@@ -13,12 +13,17 @@ function booleanInput(name: 'allow-external-context' | 'force-all'): boolean {
   if (value !== 'true' && value !== 'false') throw new InputError(name);
   return value === 'true';
 }
-function integerInput(name: 'timeout-ms' | 'max-diff-bytes', defaultValue: number): number {
+type IntegerInput = 'timeout-ms' | 'max-collected-patch-bytes' | 'max-analysis-bytes' | 'max-jev-calls';
+function integerInput(name: IntegerInput, defaultValue: number): number {
   const value = core.getInput(name) || String(defaultValue);
-  if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value))) throw new InputError(name);
+  // 0 is meaningful: it means "no ceiling".
+  if (!/^(0|[1-9][0-9]*)$/.test(value) || !Number.isSafeInteger(Number(value))) throw new InputError(name);
   return Number(value);
 }
 async function main(): Promise<void> {
+  // `max-diff-bytes` no longer has a meaning: the action never builds a complete
+  // diff. Rather than silently reinterpreting it, say so and fail.
+  if (core.getInput('max-diff-bytes')) throw new InputError('max-diff-bytes');
   const mode = core.getInput('mode') || 'enforce';
   if (mode !== 'shadow' && mode !== 'enforce') throw new InputError('mode');
   const testedRef = core.getInput('tested-ref') || 'merge';
@@ -28,7 +33,10 @@ async function main(): Promise<void> {
     githubToken: core.getInput('github-token'), apiKey: core.getInput('api-key'),
     apiBaseUrl: core.getInput('api-base-url'), apiModel: core.getInput('api-model'),
     allowExternalContext: booleanInput('allow-external-context'), forceAll: booleanInput('force-all'),
-    timeoutMs: integerInput('timeout-ms', 10000), maxDiffBytes: integerInput('max-diff-bytes', 65536),
+    timeoutMs: integerInput('timeout-ms', 0),
+    maxCollectedPatchBytes: integerInput('max-collected-patch-bytes', 0),
+    maxAnalysisBytes: integerInput('max-analysis-bytes', 0),
+    maxJevCalls: integerInput('max-jev-calls', 0),
   };
   validateInputs(inputs);
   const event: unknown = JSON.parse(await readFile(process.env.GITHUB_EVENT_PATH!, 'utf8'));
@@ -49,6 +57,15 @@ async function main(): Promise<void> {
     core.warning('summary-unavailable');
   }
   core.info(`jev-ci-selector: ${plan.status}, ${plan.selected.length}/${Object.keys(plan.tasks).length} tasks (${plan.mode})`);
+  const { analysis } = report;
+  core.info(`analysis: ${analysis.required_without_analysis.length} forced, ${analysis.analysed_tasks.length} analysed;`
+    + ` ${analysis.changes_read}/${analysis.changes_total ?? 0} changes read;`
+    + ` ${analysis.patch_bytes_read} patch bytes; ${analysis.jev_calls} Jev calls`);
+  if (analysis.fallback_scope !== 'none') {
+    // Reasons and task IDs come from fixed allowlists, never from error text.
+    core.info(`reason=${analysis.limits_reached.join(',') || plan.status} scope=${analysis.fallback_scope}`
+      + ` affected_tasks=${analysis.fallback_tasks.join(',')}`);
+  }
 }
 void main().catch(error => {
   // Error objects can carry HTTP bodies, source code, paths and credentials. Never log them.

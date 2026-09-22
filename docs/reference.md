@@ -31,10 +31,37 @@ GitHub passes strings. Validation and normalization precede Git or HTTP access, 
 | `tested-ref` | `merge` | `merge` or `head` |
 | `pull-request` | Empty | Open PR number for `workflow_dispatch`; add `pull-requests: read` |
 | `force-all` | `'false'` | All tasks, no Jev request |
-| `timeout-ms` | `10000` | Integer from 1 to 2147483647; shared context-preparation and final evaluation deadline |
-| `max-diff-bytes` | `65536` | Positive safe integer; complete UTF-8 diff limit |
+| `timeout-ms` | `0` | `0` for no deadline, else 1 to 2147483647; shared context-preparation and analysis deadline, started once the inventory is built |
+| `max-collected-patch-bytes` | `0` | `0` for none; patch bytes received on stdout, rejected and retried attempts included |
+| `max-analysis-bytes` | `0` | `0` for none; complete request JSON sent to the API, preparation and observation together |
+| `max-jev-calls` | `0` | `0` for none; API calls dispatched, failures included |
 
 Boolean inputs accept only `true` and `false`; quote them in YAML. Integers use decimal integer syntax, without permissive suffix parsing.
+
+`max-diff-bytes` has been removed. The action no longer builds a complete diff, so the input has no meaning it could keep; supplying it fails with a migration diagnostic rather than being reinterpreted. Replace it with `max-collected-patch-bytes`, whose value bounds a different thing: the patch text actually read, not the size of a whole diff. Runs pinned to an earlier release are unaffected.
+
+**There is nothing to size for scale.** All four ceilings default to `0`, meaning none: a run is bounded by the provider's own window and rate limits and by the job's `timeout-minutes`. They remain available as explicit ceilings for anyone who wants one, and each still counts what it names — real UTF-8 or JSON bytes, real calls — never a token count or an estimate of one.
+
+Requests are sized from the provider's documented window (32k tokens for `state` plus the longest question) using a bytes-per-token ratio measured from `usage.input_tokens` on real responses, starting from a declared prior. A payload the provider refuses is split and retried rather than abandoned, and each refusal lowers the ratio, so the retry terminates. Concurrency adapts too: it starts at four, widens after sustained success, halves on a rate limit and floors at one, shared between preparation and analysis. Rate limits and transient faults are retried with backoff, bounded by the deadline.
+
+Measured behaviour with every ceiling at `0`, one task, changes judged independent:
+
+| Changed files | Calls | Patch delivered | Outcome |
+| ---: | ---: | ---: | --- |
+| 200 | 9 | 0.3 MB | `planned`, skip |
+| 1 000 | 51 | 1.4 MB | `planned`, skip |
+| 5 000 | 256 | 6.9 MB | `planned`, skip |
+| 20 000 | 1 025 | 27.7 MB | `planned`, skip |
+
+At the published price those runs cost roughly a cent to thirty cents. What bounds them in practice is the 1 200 requests per minute rate limit and the job's own timeout.
+
+`max-collected-patch-bytes` bounds the **work**, not the useful context: a read that Git interrupted, and a patch produced in full but then rejected as binary or unrepresentable, are both charged. The report separates the two, as `analysis.patch_bytes_read` and `analysis.patch_bytes_delivered`.
+
+`patch_bytes_read` counts bytes received on the command's standard output, a timeout after partial output included. It measures what Git delivered, not the work Git performed internally, and the chunk that crosses a ceiling is reported as received rather than clamped to that ceiling — so a read can be charged slightly more than its cap, and the report shows the overshoot instead of hiding it.
+
+Half of `max-analysis-bytes` and half of `max-jev-calls` are reserved for context preparation, so it can never starve the decision it serves. Two consequences are worth planning for. Preparation asks one question per tracked repository path, per pass, per job anchor, so its cost scales with the **size of the repository**, not with the size of the change: about 220 KB for a 250-file repository with a single anchor, and proportionally more with more files or more anchors. And below `max-jev-calls: 2` the preparation share floors to zero, so `resolve_context_files` cannot run at all. In both cases the affected tasks are retained with `context-resolution-incomplete`, and `analysis.limits_reached` names the ceiling that stopped it.
+
+`timeout-ms` keeps its historical meaning — the shared deadline for context preparation and analysis — and its clock starts once the comparison is verified and the inventory is built, so a slow fetch cannot silently consume the analysis allowance. Git commands keep their own separate timeouts, and no read or call is started once the deadline has passed. At its default of `0` there is no internal deadline at all: the job's `timeout-minutes` bounds the run, and a step killed that way publishes **no report and no outputs**, which leaves the consuming workflow with no selection rather than a fallback. Set `timeout-ms` if you would rather degrade gracefully.
 
 There are no per-task providers or budgets, no file path interpretation of `tasks`, and no configuration source precedence.
 
@@ -120,17 +147,40 @@ Named and aggregate outputs agree. Shadow and bypass retain all declared tasks. 
 
 Use `steps.select.outputs.unit == 'true'` within a job, or forward it through job outputs for `needs.selection.outputs.unit == 'true'`. Check `has-tasks` before matrix expansion. Keep existing CI failure gates; the action does not make a skipped consumer job prove that planning succeeded. [Static](../examples/static-jobs/README.md) and [matrix](../examples/matrix/README.md) examples include advanced final gates.
 
-## Report v7
+## Analysis order and budgets
 
-The report is persisted and validated before outputs are published. The [strict schema](../schemas/report.schema.json) is authoritative; historical report versions are rejected and the current analyzer accepts only v7. Version 7 records raw task Choice answers and removes the numeric selection threshold while keeping the report source-free.
+Nothing is read before the deterministic rules have run:
+
+1. Inputs and event are validated, then the existing bypasses apply, without any repository access.
+2. The comparison is verified: SHAs, merge base and merge parents.
+3. The manifest is inventoried from `diff --raw`: names, modes and object ids. No `numstat`, no similarity search, no blob read and no patch. Rename detection is off, so a rename appears as a deletion plus an addition and both paths stay visible to `force_paths` and the protected-path rule.
+4. The deterministic policy selects the tasks whose execution is already settled.
+5. Only the remaining candidates have their job metadata and context resolved.
+6. Patch text is then collected one bounded unit at a time, and only while some task is still open.
+7. Each unit is grouped and evaluated; a task whose execution becomes acquired is removed from every request that has not started.
+8. Analysis stops as soon as no candidate can still change state.
+
+In `enforce`, a selection where every task is already required reads no patch, resolves no metadata or context, and dispatches no API call. A global protection such as a workflow edit has the same effect. In `shadow`, every task is still observed so evaluation campaigns keep seeing a proposal, while the effective outputs stay unchanged.
+
+An exclusion requires complete coverage: every inventoried change must have been read and judged independent for that task. An unread change never becomes independent by default, and an incomplete inventory authorizes no new exclusion. Failures are scoped to the tasks they concern, so one task retained for lack of evidence does not erase another task's complete decision; the root status is then `fallback` while already-qualified outputs stay `false`.
+
+## Report v8
+
+The report is persisted and validated before outputs are published. The [strict schema](../schemas/report.schema.json) is authoritative; historical report versions are rejected and the current analyzer accepts only v8.
+
+Version 8 follows the removal of the whole-diff step. `diff_hash` and `diff_bytes` stay `null` whenever no complete diff was built, which is the normal case: they are not back-filled by a read nothing else needed. The inventory is identified by `manifest.hash` instead, and groups carry `change_ids` and a `unit_index` rather than offsets into a global diff that does not exist.
 
 | Group | Fields |
 | --- | --- |
-| Version | `version: 7` |
+| Version | `version: 8` |
 | Commits | `base_sha`, `head_sha`, `tested_sha`, `tested_ref`, `diff_base_sha` |
 | Metadata | `metadata_sha`, `job_metadata` |
 | Definition | `selection_hash` |
-| Diff | `diff_hash`, `diff_bytes`, `changed_path_count` |
+| Inventory | `manifest.complete`, `manifest.hash`, `manifest.change_count`, `changed_path_count` |
+| Collection | `analysis.patches_requested`, `analysis.patches_read`, `analysis.patch_bytes_read`, `analysis.patch_bytes_delivered`, `analysis.changes_read`, `analysis.changes_total` |
+| Inference | `analysis.preparation_calls`, `analysis.preparation_bytes`, `analysis.observation_calls`, `analysis.observation_bytes`, `analysis.jev_calls`, `analysis.analysis_bytes`, `analysis.limits_reached` |
+| Coverage | `analysis.analysed_tasks`, `analysis.required_without_analysis`, `analysis.task_states`, `analysis.coverage`, `analysis.fallback_scope`, `analysis.fallback_tasks` |
+| Legacy diff | `diff_hash`, `diff_bytes` (null unless a complete diff was built) |
 | Execution | `mode`, `status`, `durations_ms`, `usage` |
 | Model | `model.requested`, `model.expected`, `model.returned` |
 | Decisions | `tasks` |
@@ -140,6 +190,12 @@ The report is persisted and validated before outputs are published. The [strict 
 `metadata_sha` is the reference revision for metadata even when no task requests it. `selection_hash` is SHA-256 of canonical JSON `{ model, tasks }` after normalization and defaults: recursively sorted object keys, preserved array order. YAML formatting does not change it.
 
 Each task decision contains `proposed_run`, `run` and `reasons`. Judgments live in observations by group. Observations include groups, requests, judgments, errors, models, usages and durations. `context_resolution` records task IDs, complete or incomplete status, context errors, trusted source paths with SHA-256 hashes and preparation passes. Calls record paths, request hashes, status, judgments, model, usage, duration and a fixed error code. It contains no file contents, raw source, diffs, secrets or provider error text. An empty object represents disabled or bypassed context resolution.
+
+`analysis.changes_read` against `analysis.changes_total` says how much of the inventory the analysis actually reached. A lower `changes_read` is how an early stop is recognised, including when it happens between two collection units and therefore materialises no skipped group at all: the observation is then `stopped-early`, never `complete`. The converse holds too — a change set read in full is `complete` even when the very last group settled the last task, and no extra read is performed merely to establish that.
+
+`analysis.fallback_tasks` and `analysis.task_states` are derived from each task's explicit retention reasons, not from its proposal: a task made mandatory by unusable metadata still proposes `true`, and must still appear in the fallback it caused. Unusable metadata and an incomplete context both report `fallback`.
+
+`analysis.task_states` reports the per-task outcome: `settled-run` for an acquired execution, `settled-skip` for an exclusion backed by complete coverage, `fallback-run` for a task retained for lack of evidence, and `pending` only if analysis never reached it. `analysis.coverage` is true only when every obligation was really discharged. A group whose status is `not-needed` was skipped because every task was already decided; that is a success of the decision, reported as `stopped-early`, and never a timeout. `analysis.limits_reached` names the budgets that were actually hit.
 
 Each observed chunk has a nullable `judgments` map of task IDs to `{ choice, probabilities, confidence }`. The exact three probability keys are `required`, `independent` and `unresolved`. Model-based policy reasons are `jev-independent` or `jev-not-independent`. No cross-group probability is synthesized.
 
