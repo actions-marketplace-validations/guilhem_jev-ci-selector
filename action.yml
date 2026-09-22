@@ -10,9 +10,6 @@ inputs:
   model:
     description: Canonical Jev model version expected in the response.
     default: jev-1.13.0
-  skip-below:
-    description: Strict exclusion threshold between 0 and 1; equality retains the task.
-    default: '0.05'
   mode:
     description: shadow preserves all effective tasks; enforce applies the proposal.
     default: enforce

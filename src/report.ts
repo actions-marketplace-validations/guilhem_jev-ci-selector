@@ -6,13 +6,12 @@ import type { Usage } from './jev.js';
 import type { ContextResolutionReport } from './context.js';
 
 export interface Report {
-  version: 6;
+  version: 7;
   metadata_sha: string;
   base_sha: string;
   head_sha: string;
   tested_sha: string;
   selection_hash: string;
-  skip_below: number;
   diff_hash: string | null;
   diff_bytes: number | null;
   changed_path_count: number | null;
@@ -49,20 +48,20 @@ function markdown(value: string): string {
 function observationSummary(observation: Observation | null): string[] {
   if (!observation) return ['Observation status: not-collected (no Jev call).'];
   const rows = observation.chunks.map(chunk => {
-    const scores = chunk.probabilities
-      ? Object.entries(chunk.probabilities).sort(([left], [right]) => left.localeCompare(right))
-        .map(([id, probability]) => `${markdown(id)}=${probability}`).join(', ') || '—'
+    const judgments = chunk.judgments
+      ? Object.entries(chunk.judgments).sort(([left], [right]) => left.localeCompare(right))
+        .map(([id, answer]) => `${markdown(id)}=${markdown(answer.choice)} (${Object.entries(answer.probabilities).map(([option, probability]) => `${markdown(option)}=${probability}`).join(', ')}; confidence=${answer.confidence})`).join('; ')
       : '—';
-    return `| ${chunk.index} | ${chunk.start_byte}–${chunk.end_byte} | ${chunk.diff_bytes} | ${markdown(chunk.status)} | ${markdown(chunk.model ?? '—')} | ${chunk.duration_ms ?? '—'} | ${scores} | ${markdown(chunk.error ?? '—')} |`;
+    return `| ${chunk.index} | ${chunk.start_byte}–${chunk.end_byte} | ${chunk.diff_bytes} | ${markdown(chunk.status)} | ${markdown(chunk.model ?? '—')} | ${chunk.duration_ms ?? '—'} | ${judgments} | ${markdown(chunk.error ?? '—')} |`;
   });
   return [
     `Observation status: ${observation.status} (${observation.strategy}); ${observation.chunks.length} chunk(s).`,
     '',
-    '| Chunk | Byte range | Diff bytes | Status | Model | Duration (ms) | Per-task scores | Error |',
+    '| Chunk | Byte range | Diff bytes | Status | Model | Duration (ms) | Per-task judgments | Error |',
     '| ---: | ---: | ---: | --- | --- | ---: | --- | --- |',
     ...rows,
     '',
-    'Scores above are raw per-chunk Jev responses. No cross-chunk aggregate or global model probability is reported.',
+    'Values above are raw per-chunk Jev responses. No cross-chunk aggregate or global model probability is reported.',
   ];
 }
 
@@ -106,7 +105,7 @@ export function summary(report: Report): string {
     `Tested commit: \`${markdown(report.tested_sha)}\``, '',
     ...contextResolutionSummary(report.context_resolution), '',
     ...observationSummary(report.observation), '',
-    'Scores are experimental selection signals, not guarantees about test outcomes.', '',
+    'Jev judgments guide selection; they do not guarantee test outcomes.', '',
     '</details>', '',
   ].join('\n');
 }

@@ -1,4 +1,5 @@
-import { stringify } from 'yaml';
+import { judgment } from '../fixtures/selection.js';
+import { parse, stringify } from 'yaml';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -50,7 +51,7 @@ test('distributed bundle runs against real Git objects, publishes shadow/enforce
           GITHUB_EVENT_PATH: eventPath, GITHUB_OUTPUT: output, GITHUB_STEP_SUMMARY: summary, RUNNER_TEMP: root,
           INPUT_TASKS: stringify(tasks), 'INPUT_API-KEY': 'SECRET-SENTINEL', 'INPUT_GITHUB-TOKEN': 'TOKEN-SENTINEL', 'INPUT_ALLOW-EXTERNAL-CONTEXT': 'true',
           FIXTURE_REMOTE: pathToFileURL(remote).href,
-          FIXTURE_RESPONSE: JSON.stringify({ model: 'jev-1.13.0', answers: { helm: { type: 'noul', noul: 0 }, unit: { type: 'noul', noul: 0 } }, usage: { input_tokens: 10, output_tokens: 1 } }),
+          FIXTURE_RESPONSE: JSON.stringify({ model: 'jev-1.13.0', answers: { helm: { type: 'choice', ...judgment() }, unit: { type: 'choice', ...judgment() } }, usage: { input_tokens: 10, output_tokens: 1 } }),
           ...overrides },
       });
       assert.ok(!(`${result.stdout}${result.stderr}`).includes('SENTINEL'));
@@ -60,7 +61,7 @@ test('distributed bundle runs against real Git objects, publishes shadow/enforce
       const { result, outputs } = await run({ INPUT_MODE: mode });
       assert.equal(result.status, 0, result.stdout + result.stderr);
       const report: unknown = JSON.parse(await readFile(outputs['report-path']!, 'utf8')); validateReport(report);
-      assert.equal(report.version, 6);
+      assert.equal(report.version, 7);
       assert.deepEqual(report.context_resolution['.github/workflows/ci.yml#unit']!.sources.map(source => source.path), ['check.sh', 'checks.ini']);
       assert.equal(outputs.status, 'planned', JSON.stringify(report));
       assert.deepEqual(JSON.parse(outputs.run!), { helm: mode === 'shadow', unit: true });
@@ -76,11 +77,11 @@ test('distributed bundle runs against real Git objects, publishes shadow/enforce
     assert.equal(custom.outputs.status, 'planned');
     assert.equal(custom.outputs.helm, 'false'); assert.equal(custom.outputs.unit, 'true');
     const customReport: unknown = JSON.parse(await readFile(custom.outputs['report-path']!, 'utf8')); validateReport(customReport);
-    assert.equal(customReport.version, 6);
+    assert.equal(customReport.version, 7);
     assert.deepEqual(customReport.model, { requested: 'jev-1.13-free', expected: 'jev-1.13.0', returned: 'jev-1.13.0' });
     assert.ok(!JSON.stringify(customReport).includes('SENTINEL'));
     const wrongModel = await run({ ...api, FIXTURE_RESPONSE: JSON.stringify({ model: 'jev-1.13.1',
-      answers: { helm: { type: 'noul', noul: 0 } }, usage: { input_tokens: 10, output_tokens: 1 } }) });
+      answers: { helm: { type: 'choice', ...judgment() } }, usage: { input_tokens: 10, output_tokens: 1 } }) });
     assert.equal(wrongModel.result.status, 0); assert.equal(wrongModel.outputs.status, 'fallback');
     assert.equal(wrongModel.outputs.helm, 'true'); assert.equal(wrongModel.outputs.unit, 'true');
     const invalidApi = await run({ 'INPUT_API-BASE-URL': 'https://user:SECRET-SENTINEL@api.test', FIXTURE_RESPONSE: '' });
@@ -92,6 +93,13 @@ test('distributed bundle runs against real Git objects, publishes shadow/enforce
     const bypass = await run({ 'INPUT_API-KEY': '', FIXTURE_RESPONSE: '' });
     assert.equal(bypass.result.status, 0); assert.equal(bypass.outputs.status, 'bypassed');
     assert.equal(bypass.outputs.helm, 'true'); assert.equal(bypass.outputs.unit, 'true');
+    const smokeWorkflow = parse(await readFile('.github/workflows/ci.yml', 'utf8'));
+    const smoke = smokeWorkflow.jobs['self-test'].steps.find((step: Record<string, unknown>) => step.name === 'Assert local action outputs');
+    assert.ok(smoke && typeof smoke.run === 'string');
+    const assertion = spawnSync('bash', ['-e', '-c', smoke.run], { encoding: 'utf8', env: { ...process.env,
+      STATUS: bypass.outputs.status!, HAS_TASKS: bypass.outputs['has-tasks']!, REPORT_PATH: bypass.outputs['report-path']!,
+    } });
+    assert.equal(assertion.status, 0, `Hosted self-test must accept the bundled report: ${assertion.stderr}`);
     const defaultMode = await run({ INPUT_MODE: '' });
     assert.equal(defaultMode.result.status, 0);
     assert.equal(defaultMode.outputs.helm, 'false');
@@ -106,7 +114,7 @@ test('distributed bundle runs against real Git objects, publishes shadow/enforce
     assert.equal(summaryUnavailable.outputs.helm, 'true');
     assert.equal(summaryUnavailable.outputs['has-tasks'], 'true');
     const empty = await run({ INPUT_TASKS: stringify({ helm: tasks.helm }), INPUT_MODE: 'enforce',
-      FIXTURE_RESPONSE: JSON.stringify({ model: 'jev-1.13.0', answers: { helm: { type: 'noul', noul: 0 } }, usage: { input_tokens: 10, output_tokens: 1 } }) });
+      FIXTURE_RESPONSE: JSON.stringify({ model: 'jev-1.13.0', answers: { helm: { type: 'choice', ...judgment() } }, usage: { input_tokens: 10, output_tokens: 1 } }) });
     assert.equal(empty.result.status, 0);
     assert.equal(empty.outputs.helm, 'false'); assert.equal(empty.outputs.unit, undefined);
     assert.equal(empty.outputs['has-tasks'], 'false'); assert.deepEqual(JSON.parse(empty.outputs.selected!), []);
@@ -133,19 +141,19 @@ test('distributed bundle runs against real Git objects, publishes shadow/enforce
       FIXTURE_PULL_REQUEST: JSON.stringify({ state: 'open', merge_commit_sha: largeMerge,
         base: { sha: base, repo }, head: { sha: largeHead, repo } }),
       FIXTURE_REQUESTS: requestsPath,
-      FIXTURE_RESPONSE: JSON.stringify({ model: 'jev-1.13.0', answers: { helm: { type: 'noul', noul: 0.01 },
-        unit: { type: 'noul', noul: 0.8 } }, usage: { input_tokens: 10, output_tokens: 1 } }),
+      FIXTURE_RESPONSE: JSON.stringify({ model: 'jev-1.13.0', answers: { helm: { type: 'choice', ...judgment() },
+        unit: { type: 'choice', ...judgment('required') } }, usage: { input_tokens: 10, output_tokens: 1 } }),
     });
     assert.equal(manual.result.status, 0, manual.result.stdout + manual.result.stderr);
     const report: unknown = JSON.parse(await readFile(manual.outputs['report-path']!, 'utf8')); validateReport(report);
-    assert.equal(report.version, 6);
+    assert.equal(report.version, 7);
     assert.equal(report.metadata_sha, workflow); assert.equal(report.base_sha, base);
     assert.equal(report.head_sha, largeHead); assert.equal(report.tested_sha, largeMerge);
     assert.equal(report.status, 'bypassed'); assert.equal(report.observation?.status, 'complete');
     assert.equal(report.observation?.strategy, 'chunked-diff');
     assert.ok(report.diff_bytes! > 65536);
     assert.deepEqual(JSON.parse(manual.outputs.run!), { helm: true, unit: true });
-    const requests = (await readFile(requestsPath, 'utf8')).trim().split('\n').map(line => JSON.parse(line)).filter(request => Object.values(request.questions).every((question: any) => question.type === 'noul'));
+    const requests = (await readFile(requestsPath, 'utf8')).trim().split('\n').map(line => JSON.parse(line)).filter(request => Object.values(request.questions).every((question: any) => question.type === 'choice' && Object.hasOwn(question.criteria, 'independent')));
     assert.equal(requests.length, report.observation!.chunks.length);
     assert.ok(requests.length > 1 && requests.length <= 32);
     const reconstructed = requests.map(request => request.state.diff).join('');
@@ -155,7 +163,7 @@ test('distributed bundle runs against real Git objects, publishes shadow/enforce
       assert.deepEqual(Object.keys(request.questions).sort(), ['helm', 'unit']);
       assert.match(JSON.stringify(request.questions.unit), /Reviewed backend verification scope/);
     }
-    for (const chunk of report.observation!.chunks) assert.deepEqual(chunk.probabilities, { helm: 0.01, unit: 0.8 });
+    for (const chunk of report.observation!.chunks) assert.deepEqual(chunk.judgments, { helm: judgment(), unit: judgment('required') });
     assert.ok(!JSON.stringify(report).includes('SENTINEL'));
     assert.ok(!(await readFile(join(root, 'summary'), 'utf8')).includes('SENTINEL'));
   } finally { await rm(root, { recursive: true, force: true }); }

@@ -86,7 +86,11 @@ If preparation is incomplete, affected tasks run and the report records `context
 
 When opting into discovery, consider `timeout-ms: '60000'` for the shared preparation and evaluation budget. The input default remains 10 seconds; larger trees can need a longer budget. Without opt-in, only job metadata and explicit context are used.
 
-A `false` output is a policy decision, not a guarantee that the task cannot detect a regression. The default threshold `0.05` is experimental. Changes to workflows retain all declared tasks. An invalid task definition fails selection without publishing a plan.
+A `false` output is a policy decision, not a guarantee that the task cannot detect a regression. Changes to workflows retain all declared tasks. An invalid task definition fails selection without publishing a plan.
+
+For precise descriptions and explicit context, use the [describe-ci-jobs skill](skills/describe-ci-jobs/SKILL.md). It follows the job's commands, tool configuration and local actions to describe its actual verification scope, independently of the current PR.
+
+Jev classifies each change group against each task as `required`, `independent` or `unresolved`. Only `independent` in every group permits skipping; `required` and `unresolved` retain the task. Raw choices, distributions and confidence appear in report v7. There is no threshold to tune.
 
 ## Observe or customize
 
@@ -126,4 +130,4 @@ Tests use temporary Git repositories, mocked HTTP and the shipped bundles. Repla
 
 Commit regenerated bundles with their sources. `npm run check:dist` checks reproducibility. The action and standalone analyzer include their dependency license notices.
 
-This API is a breaking update: existing integrations must supply inline `tasks`; explicitly set `mode: shadow` to retain observation-only behavior. The current analyzer accepts report v6 only.
+This API is a breaking update: existing integrations must supply inline `tasks`; explicitly set `mode: shadow` to retain observation-only behavior. The current analyzer accepts report v7 only.
