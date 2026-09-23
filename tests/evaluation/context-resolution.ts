@@ -304,4 +304,4 @@ async function main(): Promise<void> {
 const isMain = typeof __filename === 'string' && process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(__filename);
 if (isMain) main().catch(error => { process.stderr.write(`${error instanceof Error ? error.message : 'context-evaluation-error'}\n`); process.exitCode = 1; });
 
-export { syntheticCases, evaluateCase, metricsFor, summarize };
+export { syntheticCases, evaluateCase, metricsFor, summarize, freshResolution, changedPaths };

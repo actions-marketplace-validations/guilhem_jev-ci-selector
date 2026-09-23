@@ -198,3 +198,37 @@ test('an oversized multi-job union retains only its affected task without droppi
   assert.ok(f.resolved.metadata.tasks.both!.missing.includes('context-resolution:combined-context-too-large'));
   assert.deepEqual(f.resolved.selection.tasks.both!.evidence.contextFiles, [{ path: 'explicit.md', content: 'declared' }]);
 });
+
+test('per-path questions reference the contract instead of repeating it', async () => {
+  const seen: Array<{ state: unknown; questions: Record<string, { criteria: Record<string, string> }> }> = [];
+  const evaluate = async (input: never) => {
+    const request = input as unknown as typeof seen[number];
+    seen.push(request);
+    return { model: 'jev-1.13.0', usage: { input_tokens: 1000, output_tokens: 1 },
+      answers: Object.fromEntries(Object.entries(request.questions).map(([id, question]) => {
+        const option = Object.keys(question.criteria)[0]!;
+        return [id, { type: 'choice', choice: option, confidence: 1,
+          probabilities: Object.fromEntries(Object.keys(question.criteria).map(o => [o, o === option ? 1 : 0])) }];
+      })) };
+  };
+  const paths = Array.from({ length: 40 }, (_, index) => `src/module-${index}.ts`);
+  await resolveContextFiles({
+    configured: { model: 'jev-1.13.0', tasks: { unit: { description: 'Verifies units.', resolve_context_files: true } } },
+    resolved: {
+      selection: { model: 'jev-1.13.0', tasks: { unit: { evidence: { description: 'Verifies units.' } } } },
+      metadata: { repository: 'acme/example', commit: 'a'.repeat(40),
+        tasks: { unit: { incomplete: false, missing: [], provenance: [], hashes: {}, warnings: [], nativeDependencies: [] } } },
+      workingDirectories: [],
+    },
+    repository: { listFiles: async () => paths, readFile: async () => Buffer.from('body\n') },
+    commit: 'a'.repeat(40), apiKey: 'k', deadline: performance.now() + 60_000,
+  } as never, evaluate as never, 1);
+
+  const first = seen[0]!;
+  const question = Object.values(first.questions)[0]!;
+  // A question carries its path and references; the wording lives in the state.
+  assert.ok(Buffer.byteLength(JSON.stringify(question)) < 300);
+  const state = JSON.stringify(first.state);
+  assert.ok(state.includes('question_contract'));
+  assert.ok(state.includes('Topic similarity is insufficient'));
+});

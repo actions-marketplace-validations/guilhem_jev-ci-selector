@@ -10,6 +10,7 @@ test('offline context comparison measures bounded preparation waves', async () =
   assert.deepEqual(records.map(record => record.metrics.incorrect_skips.length), [1, 1, 0]);
   assert.ok(records.every(record => record.status === 'complete'));
   assert.deepEqual(summarize(records).waves.map(wave => wave.incomplete), [0, 0, 0]);
+
 });
 
 test('recall stays per task and fallback is not an incorrect model skip', () => {
