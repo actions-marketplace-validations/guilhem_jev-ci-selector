@@ -35,15 +35,18 @@ test('API input errors use a safe code and distinguish URL and model', () => {
 });
 
 test('planner identifies invalid inputs before repository access', async () => {
-  const inputs: Inputs = { model: 'jev-1.13.0', skip_below: 0.05, tasks: {}, mode: 'shadow', githubToken: '', apiKey: '',
-    allowExternalContext: false, forceAll: false, timeoutMs: 1000, maxDiffBytes: 65536 };
+  const inputs: Inputs = { model: 'jev-1.13.0', tasks: {}, mode: 'shadow', githubToken: '', apiKey: '',
+    allowExternalContext: false, forceAll: false, timeoutMs: 1000,
+    maxCollectedPatchBytes: 1024 * 1024, maxAnalysisBytes: 512 * 1024, maxJevCalls: 16 };
   for (const [override, field] of [
     [{ tasks: { invalid: {} } }, 'tasks'], [{ model: 'SECRET-SENTINEL' }, 'model'],
-    [{ skip_below: NaN }, 'skip-below'], [{ skip_below: -0.1 }, 'skip-below'],
     [{ mode: 'SECRET-SENTINEL' }, 'mode'], [{ testedRef: 'SECRET-SENTINEL' }, 'tested-ref'],
-    [{ timeoutMs: 2147483648 }, 'timeout-ms'], [{ timeoutMs: 0 }, 'timeout-ms'],
-    [{ maxDiffBytes: Number.MAX_SAFE_INTEGER + 1 }, 'max-diff-bytes'],
-    [{ maxDiffBytes: 1.5 }, 'max-diff-bytes'],
+    [{ timeoutMs: 2147483648 }, 'timeout-ms'], [{ timeoutMs: -1 }, 'timeout-ms'],
+    [{ maxCollectedPatchBytes: Number.MAX_SAFE_INTEGER + 1 }, 'max-collected-patch-bytes'],
+    [{ maxCollectedPatchBytes: 1.5 }, 'max-collected-patch-bytes'],
+    [{ maxCollectedPatchBytes: -1 }, 'max-collected-patch-bytes'],
+    [{ maxAnalysisBytes: -1 }, 'max-analysis-bytes'],
+    [{ maxJevCalls: -1 }, 'max-jev-calls'],
     [{ apiBaseUrl: 'SECRET-SENTINEL' }, 'api-base-url'],
     [{ apiModel: 'SECRET-SENTINEL invalid' }, 'api-model'],
   ] as const) {
@@ -61,7 +64,7 @@ test('planner identifies invalid inputs before repository access', async () => {
 });
 
 test('action validates all inputs before manual network access and prints safe diagnostics', () => {
-  for (const field of ['mode', 'tested-ref', 'allow-external-context', 'force-all', 'timeout-ms', 'max-diff-bytes', 'tasks', 'model', 'skip-below']) {
+  for (const field of ['mode', 'tested-ref', 'allow-external-context', 'force-all', 'timeout-ms', 'max-diff-bytes', 'tasks', 'model']) {
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('INPUT_')));
     env.INPUT_TASKS = '{}';
     env.GITHUB_EVENT_NAME = 'workflow_dispatch';

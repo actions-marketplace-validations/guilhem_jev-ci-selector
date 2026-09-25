@@ -9,14 +9,15 @@ export interface TaskDefinition {
   description: string;
   jobs?: JobReference[];
   context_files?: string[];
+  resolve_context_files?: boolean;
   always?: boolean;
   force_paths?: string[];
 }
 export type TaskDefinitions = Record<string, TaskDefinition>;
-export interface SelectionDefinition { model: string; skip_below: number; tasks: TaskDefinitions }
+export interface SelectionDefinition { model: string; tasks: TaskDefinitions }
 export interface TaskEvidence { description: string; [key: string]: unknown }
 export interface ResolvedTask { always?: boolean; force_paths?: string[]; evidence: TaskEvidence }
-export interface ResolvedSelection { model: string; skip_below: number; tasks: Record<string, ResolvedTask> }
+export interface ResolvedSelection { model: string; tasks: Record<string, ResolvedTask> }
 
 const validateSchema = new Ajv({ allErrors: true, strict: true }).compile<TaskDefinitions>(schema);
 const reservedIds = new Set(schema.definitions.taskId.not.enum.map(id => id.toLowerCase()));
@@ -37,17 +38,16 @@ export function validateTasks(value: unknown): asserts value is TaskDefinitions 
 
 function validateSettings(value: Record<string, unknown>): void {
   if (typeof value.model !== 'string' || !/^jev-[0-9]+\.[0-9]+\.[0-9]+(?![\s\S])/.test(value.model)) throw new InputError('model');
-  if (typeof value.skip_below !== 'number' || !Number.isFinite(value.skip_below) || value.skip_below < 0 || value.skip_below > 1) throw new InputError('skip-below');
 }
 
 export function validateSelection(value: unknown): asserts value is SelectionDefinition {
-  if (!record(value) || Object.keys(value).some(key => !['model', 'skip_below', 'tasks'].includes(key))) throw new InputError('tasks');
+  if (!record(value) || Object.keys(value).some(key => !['model', 'tasks'].includes(key))) throw new InputError('tasks');
   validateSettings(value);
   validateTasks(value.tasks);
 }
 
 export function validateResolvedSelection(value: unknown): asserts value is ResolvedSelection {
-  if (!record(value) || !record(value.tasks) || Object.keys(value).some(key => !['model', 'skip_below', 'tasks'].includes(key))) throw new InputError('tasks');
+  if (!record(value) || !record(value.tasks) || Object.keys(value).some(key => !['model', 'tasks'].includes(key))) throw new InputError('tasks');
   validateSettings(value);
   validateIds(value.tasks);
   const definitions: Record<string, unknown> = {};
@@ -67,15 +67,14 @@ export function parseTasks(source: string): TaskDefinitions {
     if (document.errors.length || document.warnings.length) throw new InputError('tasks');
     const value: unknown = document.toJS({ maxAliasCount: 0 });
     validateTasks(value);
-    return Object.fromEntries(Object.entries(value).map(([id, task]) => [id, { ...task, always: task.always ?? false }]));
+    return Object.fromEntries(Object.entries(value).map(([id, task]) => [id, { ...task, always: task.always ?? false,
+      resolve_context_files: task.resolve_context_files ?? false }]));
   } catch { throw new InputError('tasks'); }
 }
 
 export function parseSelectionInputs(getInput: (name: string) => string): SelectionDefinition {
   const model = getInput('model').trim() || 'jev-1.13.0';
-  const threshold = getInput('skip-below').trim() || '0.05';
-  if (!/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?![\s\S])/.test(threshold)) throw new InputError('skip-below');
-  const selection = { model, skip_below: Number(threshold), tasks: parseTasks(getInput('tasks')) };
+  const selection = { model, tasks: parseTasks(getInput('tasks')) };
   validateSelection(selection);
   return selection;
 }
@@ -87,6 +86,7 @@ function canonical(value: unknown): unknown {
 }
 
 export function selectionHash(selection: SelectionDefinition): string {
-  const tasks = Object.fromEntries(Object.entries(selection.tasks).map(([id, task]) => [id, { ...task, always: task.always ?? false }]));
-  return createHash('sha256').update(JSON.stringify(canonical({ model: selection.model, skip_below: selection.skip_below, tasks }))).digest('hex');
+  const tasks = Object.fromEntries(Object.entries(selection.tasks).map(([id, task]) => [id, { ...task, always: task.always ?? false,
+    resolve_context_files: task.resolve_context_files ?? false }]));
+  return createHash('sha256').update(JSON.stringify(canonical({ model: selection.model, tasks }))).digest('hex');
 }

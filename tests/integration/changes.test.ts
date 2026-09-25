@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -99,8 +99,15 @@ test('collects a tested merge tree, reads base metadata, and preserves special p
     const adjusted = { ...value, head, tested };
     await withRepository(adjusted, async (repository) => {
       await repository.fetchCommit(adjusted.base);
+      const basePaths = await repository.listFiles(adjusted.base);
+      assert.ok(basePaths.includes('verification scope.md'));
+      assert.ok(basePaths.includes('-\t-\told.txt'));
+      assert.ok(!basePaths.includes('feature marker.txt'));
       assert.equal((await repository.readFile(adjusted.base, 'verification scope.md')).toString(), 'Unit verification scope.\n');
       const changes = await repository.collect({ baseSha: adjusted.base, headSha: adjusted.head, testedSha: adjusted.tested, maxDiffBytes: 100_000 });
+      const testedPaths = await repository.listFiles(adjusted.tested);
+      assert.ok(testedPaths.includes('new name $(x)\n.txt'));
+      assert.ok(testedPaths.includes('$(touch CANARY); x.txt'));
       assert.ok(changes.changedPaths.includes('new name $(x)\n.txt'));
       assert.ok(changes.changedPaths.includes('old name [x].txt'));
       assert.ok(changes.changedPaths.includes('delete me.txt'));
@@ -353,4 +360,263 @@ test('head collection deepens shallow history and diffs from the verified unique
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('the manifest inventories names and object ids without reading any content', async () => {
+  const value = await fixture(async (work) => {
+    const isFeature = await access(join(work, 'feature marker.txt')).then(() => true).catch(() => false);
+    if (!isFeature) {
+      await writeFile(join(work, 'kept.txt'), 'kept\n');
+      await writeFile(join(work, 'renamed-from.txt'), 'identical rename body\n');
+      await writeFile(join(work, 'removed.txt'), 'gone\n');
+    }
+  });
+  const work = join(value.root, 'work');
+  git(work, 'switch', '--quiet', 'feature');
+  git(work, 'mv', 'renamed-from.txt', 'renamed-to.txt');
+  git(work, 'rm', '--quiet', 'removed.txt');
+  await writeFile(join(work, 'kept.txt'), 'kept and edited\n');
+  git(work, 'add', '--all');
+  git(work, 'commit', '--quiet', '-m', 'inventory');
+  const head = git(work, 'rev-parse', 'HEAD');
+  git(work, 'switch', '--quiet', 'main');
+  git(work, 'reset', '--hard', '--quiet', value.base);
+  git(work, 'merge', '--quiet', '--no-ff', 'feature', '-m', 'inventory merge');
+  const tested = git(work, 'rev-parse', 'HEAD');
+  git(work, 'push', '--quiet', '--force', value.remote, 'HEAD:refs/heads/main', 'feature:refs/heads/feature');
+  const adjusted = { ...value, head, tested };
+  await withRepository(adjusted, async repository => {
+    await repository.fetchCommit(adjusted.base);
+    const comparison = await repository.verifyComparison({ baseSha: adjusted.base, headSha: adjusted.head, testedSha: adjusted.tested });
+    const manifest = await repository.collectManifest(comparison);
+    assert.equal(manifest.complete, true);
+    assert.equal(manifest.manifestHash!.length, 64);
+    // Rename detection is off, so a rename is a deletion plus an addition and
+    // both paths stay visible to the path-based safety rules.
+    assert.ok(manifest.changedPaths.includes('renamed-from.txt'));
+    assert.ok(manifest.changedPaths.includes('renamed-to.txt'));
+    assert.ok(manifest.changedPaths.includes('removed.txt'));
+    const removed = manifest.entries.find(entry => entry.oldPath === 'removed.txt')!;
+    assert.equal(removed.status[0], 'D');
+    assert.equal(removed.newPath, null);
+    assert.equal(removed.newOid, null);
+    assert.match(removed.oldOid!, /^[0-9a-f]{40}$/);
+    const added = manifest.entries.find(entry => entry.newPath === 'renamed-to.txt')!;
+    assert.equal(added.status[0], 'A');
+    assert.equal(added.oldPath, null);
+    assert.equal(added.issue, null);
+    assert.deepEqual([...manifest.changedPaths], [...manifest.changedPaths].sort());
+    // The same inventory hashes identically; the ids are stable within it.
+    const again = await repository.collectManifest(comparison);
+    assert.equal(again.manifestHash, manifest.manifestHash);
+    assert.deepEqual(again.entries.map(entry => entry.id), manifest.entries.map(entry => entry.id));
+  });
+});
+
+test('patch units are bounded, refuse partial output and report per-entry issues', async () => {
+  const value = await fixture(async (work) => {
+    const isFeature = await access(join(work, 'feature marker.txt')).then(() => true).catch(() => false);
+    if (!isFeature) await writeFile(join(work, 'base.txt'), 'base\n');
+    if (isFeature) {
+      await writeFile(join(work, 'small.txt'), 'small change\n');
+      await writeFile(join(work, 'big.txt'), 'padding line\n'.repeat(400));
+      await writeFile(join(work, 'blob.dat'), Buffer.from([0, 1, 2, 3, 0, 5]));
+      await writeFile(join(work, '.gitattributes'), 'blob.dat diff\n');
+    }
+  });
+  await withRepository(value, async repository => {
+    await repository.fetchCommit(value.base);
+    const comparison = await repository.verifyComparison({ baseSha: value.base, headSha: value.head, testedSha: value.tested });
+    const manifest = await repository.collectManifest(comparison);
+    const entryFor = (path: string) => manifest.entries.filter(entry => entry.newPath === path);
+
+    const small = await repository.readPatch(comparison, entryFor('small.txt'), { maxUnitBytes: 64 * 1024 });
+    assert.equal(small.issue, null);
+    assert.match(small.diff, /\+small change/);
+    assert.equal(small.bytes, Buffer.byteLength(small.diff));
+    assert.deepEqual(small.paths, ['small.txt']);
+
+    // Git's own binary marker is detected structurally, not by pattern matching
+    // inside hunk bodies.
+    const binary = await repository.readPatch(comparison, entryFor('blob.dat'), { maxUnitBytes: 64 * 1024 });
+    assert.equal(binary.issue, 'binary');
+    assert.equal(binary.diff, '');
+
+    // An oversized unit yields an issue; it never delivers a truncated prefix.
+    const capped = await repository.readPatch(comparison, entryFor('big.txt'), { maxUnitBytes: 128 });
+    assert.equal(capped.issue, 'too-large');
+    assert.equal(capped.diff, '');
+    assert.equal(capped.bytes, 0);
+
+    // The object-size pre-check refuses the work before Git renders anything.
+    const preChecked = await repository.readPatch(comparison, entryFor('big.txt'), { maxUnitBytes: 1024 * 1024, maxBlobBytes: 16 });
+    assert.equal(preChecked.issue, 'too-large');
+
+    const none = await repository.readPatch(comparison, [], { maxUnitBytes: 1024 });
+    assert.equal(none.issue, null);
+    assert.equal(none.diff, '');
+    assert.deepEqual(none.changeIds, []);
+
+    const invalidLimit = await repository.readPatch(comparison, entryFor('small.txt'), { maxUnitBytes: 0 });
+    assert.equal(invalidLimit.issue, 'too-large');
+  });
+});
+
+test('a submodule entry is an issue on its own entry, not a verdict on the inventory', async () => {
+  const value = await fixture(async (work) => {
+    const isFeature = await access(join(work, 'feature marker.txt')).then(() => true).catch(() => false);
+    if (!isFeature) await writeFile(join(work, 'base.txt'), 'base\n');
+    if (!isFeature) return;
+    await writeFile(join(work, 'plain.txt'), 'unrelated text\n');
+    const nested = join(dirname(work), 'nested-entry-source');
+    await mkdir(nested);
+    git(nested, 'init', '--quiet', '-b', 'main');
+    await writeFile(join(nested, 'nested.txt'), 'nested\n');
+    git(nested, 'add', '--all');
+    git(nested, 'commit', '--quiet', '-m', 'nested');
+    git(work, 'clone', '--quiet', nested, 'vendor');
+  });
+  await withRepository(value, async repository => {
+    await repository.fetchCommit(value.base);
+    const comparison = await repository.verifyComparison({ baseSha: value.base, headSha: value.head, testedSha: value.tested });
+    const manifest = await repository.collectManifest(comparison);
+    assert.equal(manifest.complete, true);
+    const submodule = manifest.entries.find(entry => entry.newMode === '160000' || entry.oldMode === '160000')!;
+    assert.equal(submodule.issue, 'submodule');
+    // The unrelated entry stays readable: one unsupported entry does not make
+    // the whole comparison unusable.
+    const plain = manifest.entries.filter(entry => entry.newPath === 'plain.txt');
+    assert.equal(plain.length, 1);
+    const unit = await repository.readPatch(comparison, plain, { maxUnitBytes: 64 * 1024 });
+    assert.equal(unit.issue, null);
+    assert.match(unit.diff, /\+unrelated text/);
+    assert.equal((await repository.readPatch(comparison, [submodule], { maxUnitBytes: 64 * 1024 })).issue, 'submodule');
+  });
+});
+
+test('symlinks and type changes are represented from the object database, never followed', async () => {
+  const value = await fixture(async (work) => {
+    const isFeature = await access(join(work, 'feature marker.txt')).then(() => true).catch(() => false);
+    if (!isFeature) {
+      await writeFile(join(work, 'secret.txt'), 'BASE-ONLY-SENTINEL\n');
+      await writeFile(join(work, 'becomes-link.txt'), 'plain file\n');
+    }
+  });
+  const work = join(value.root, 'work');
+  git(work, 'switch', '--quiet', 'feature');
+  await rm(join(work, 'becomes-link.txt'));
+  await symlink('secret.txt', join(work, 'becomes-link.txt'));
+  await symlink('/etc/passwd', join(work, 'absolute-link'));
+  git(work, 'add', '--all');
+  git(work, 'commit', '--quiet', '-m', 'symlinks');
+  const head = git(work, 'rev-parse', 'HEAD');
+  git(work, 'switch', '--quiet', 'main');
+  git(work, 'reset', '--hard', '--quiet', value.base);
+  git(work, 'merge', '--quiet', '--no-ff', 'feature', '-m', 'symlink merge');
+  const tested = git(work, 'rev-parse', 'HEAD');
+  git(work, 'push', '--quiet', '--force', value.remote, 'HEAD:refs/heads/main', 'feature:refs/heads/feature');
+  const adjusted = { ...value, head, tested };
+  await withRepository(adjusted, async repository => {
+    await repository.fetchCommit(adjusted.base);
+    const comparison = await repository.verifyComparison({ baseSha: adjusted.base, headSha: adjusted.head, testedSha: adjusted.tested });
+    const manifest = await repository.collectManifest(comparison);
+    const link = manifest.entries.find(entry => entry.newPath === 'absolute-link')!;
+    assert.equal(link.newMode, '120000');
+    assert.equal(link.issue, null);
+    const unit = await repository.readPatch(comparison, manifest.entries, { maxUnitBytes: 64 * 1024 });
+    assert.equal(unit.issue, null);
+    // The link target is recorded as text; the target file is never read.
+    assert.match(unit.diff, /\+\/etc\/passwd/);
+    assert.doesNotMatch(unit.diff, /root:/);
+    assert.doesNotMatch(unit.diff, /BASE-ONLY-SENTINEL/);
+    // A type change keeps both sides visible.
+    assert.match(unit.diff, /becomes-link\.txt/);
+  });
+});
+
+test('interrupted reads report the bytes stdout actually carried', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'jev-git-bytes-test-'));
+  const fakeGit = join(root, 'git');
+  // Emit a known prefix, then hang. A timeout must not erase what was received.
+  await writeFile(fakeGit, '#!/bin/sh\nprintf "0123456789"\nsleep 30\n', { mode: 0o755 });
+  const runGitFrom = (GitRepository as unknown as {
+    runGitFrom: (cwd: string, env: NodeJS.ProcessEnv, args: string[], maxStdoutBytes?: number, timeoutMs?: number) => Promise<Buffer>;
+  }).runGitFrom;
+  const env = { ...process.env, PATH: `${root}:${process.env.PATH ?? ''}` };
+  try {
+    const timedOut = await runGitFrom(root, env, ['hang'], undefined, 150).then(() => undefined, (error: unknown) => error);
+    assert.match((timedOut as Error).message, /git timed out/);
+    assert.equal((timedOut as { stdoutBytes: number }).stdoutBytes, 10,
+      'a timeout after partial output still reports those bytes');
+
+    // The chunk that crosses the cap is reported as received, not clamped down
+    // to the cap: the report shows the overshoot instead of hiding it.
+    const overshot = await runGitFrom(root, env, ['hang'], 4, 150).then(() => undefined, (error: unknown) => error);
+    assert.match((overshot as Error).message, /output limit/);
+    assert.equal((overshot as { stdoutBytes: number }).stdoutBytes, 10);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a read interrupted after partial output charges what it delivered', async () => {
+  const value = await fixture(async (work) => {
+    const isFeature = await access(join(work, 'feature marker.txt')).then(() => true).catch(() => false);
+    if (!isFeature) await writeFile(join(work, 'base.txt'), 'base\n');
+    if (isFeature) await writeFile(join(work, 'wide.txt'), 'padding line\n'.repeat(400));
+  });
+  await withRepository(value, async repository => {
+    await repository.fetchCommit(value.base);
+    const comparison = await repository.verifyComparison({ baseSha: value.base, headSha: value.head, testedSha: value.tested });
+    const manifest = await repository.collectManifest(comparison);
+    const wide = manifest.entries.filter(entry => entry.newPath === 'wide.txt');
+    const capped = await repository.readPatch(comparison, wide, { maxUnitBytes: 256 });
+    assert.equal(capped.issue, 'too-large');
+    assert.equal(capped.diff, '', 'no truncated prefix is delivered');
+    assert.equal(capped.bytes, 0, 'nothing was delivered');
+    assert.ok(capped.bytesRead > 256, 'the bytes received are reported, overshoot included');
+  });
+});
+
+test('the compatibility adapter still reads comparisons with many changed paths', async () => {
+  // `collect()` promises the complete diff, so it must not inherit the
+  // per-unit pathspec limits that bound a lazily collected unit.
+  const value = await fixture(async (work) => {
+    const isFeature = await access(join(work, 'feature marker.txt')).then(() => true).catch(() => false);
+    if (!isFeature) await writeFile(join(work, 'base.txt'), 'base\n');
+    if (!isFeature) return;
+    await mkdir(join(work, 'many'), { recursive: true });
+    for (let index = 0; index < 300; index++) {
+      await writeFile(join(work, 'many', `file-${index}.txt`), `content ${index}\n`);
+    }
+  });
+  await withRepository(value, async repository => {
+    await repository.fetchCommit(value.base);
+    const changes = await repository.collect({ baseSha: value.base, headSha: value.head,
+      testedSha: value.tested, maxDiffBytes: 1_000_000 });
+    assert.ok(changes.changedPaths.length > 256, 'more paths than one unit may carry');
+    assert.match(changes.diff, /many\/file-299\.txt/);
+    assert.equal(changes.diffBytes, Buffer.byteLength(changes.diff));
+  });
+});
+
+test('an unbounded deadline still lets Git commands run to completion', async () => {
+  // Node turns any delay past 2^31-1 into 1ms, so an unclamped "no timeout"
+  // would kill every command instantly instead of letting it finish.
+  const value = await fixture(async (work) => {
+    const isFeature = await access(join(work, 'feature marker.txt')).then(() => true).catch(() => false);
+    if (!isFeature) await writeFile(join(work, 'base.txt'), 'base\n');
+    if (isFeature) await writeFile(join(work, 'added.txt'), 'added line\n'.repeat(50));
+  });
+  await withRepository(value, async repository => {
+    await repository.fetchCommit(value.base);
+    const comparison = await repository.verifyComparison({ baseSha: value.base, headSha: value.head, testedSha: value.tested });
+    const manifest = await repository.collectManifest(comparison);
+    const entries = manifest.entries.filter(entry => entry.newPath === 'added.txt');
+    for (const timeoutMs of [Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER, 2_147_483_648]) {
+      const unit = await repository.readPatch(comparison, entries, { maxUnitBytes: 64 * 1024, timeoutMs });
+      assert.equal(unit.issue, null, `timeout ${timeoutMs} must not abort the read`);
+      assert.match(unit.diff, /\+added line/);
+    }
+  });
 });

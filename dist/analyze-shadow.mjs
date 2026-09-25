@@ -6885,7 +6885,7 @@ import { pathToFileURL } from "node:url";
 // schemas/report.schema.json
 var report_schema_default = {
   $schema: "http://json-schema.org/draft-07/schema#",
-  title: "jev-ci-selector source-free report v5",
+  title: "jev-ci-selector source-free report v8",
   type: "object",
   additionalProperties: false,
   required: [
@@ -6904,16 +6904,18 @@ var report_schema_default = {
     "durations_ms",
     "usage",
     "tasks",
-    "skip_below",
     "tested_ref",
     "diff_base_sha",
     "job_metadata",
     "observation_error",
-    "observation"
+    "observation",
+    "context_resolution",
+    "manifest",
+    "analysis"
   ],
   properties: {
     version: {
-      const: 5
+      const: 8
     },
     base_sha: {
       $ref: "#/definitions/sha"
@@ -7044,8 +7046,8 @@ var report_schema_default = {
               enum: [
                 "always",
                 "path-match",
-                "jev-below-threshold",
-                "jev-at-or-above-threshold",
+                "jev-independent",
+                "jev-not-independent",
                 "shadow-mode",
                 "force-all",
                 "protected-path",
@@ -7060,14 +7062,21 @@ var report_schema_default = {
                 "binary-change",
                 "submodule-change",
                 "unrepresentable-change",
+                "coverage-incomplete",
+                "patch-unavailable",
+                "analysis-budget-exceeded",
+                "manifest-incomplete",
                 "jev-timeout",
                 "jev-error",
                 "invalid-response",
+                "jev-rate-limited",
+                "jev-payment-required",
                 "context-too-large",
                 "chunked-observation",
                 "observation-only",
                 "metadata-unavailable",
-                "observation-incomplete"
+                "observation-incomplete",
+                "context-resolution-incomplete"
               ]
             }
           }
@@ -7083,6 +7092,15 @@ var report_schema_default = {
           $ref: "#/definitions/observation"
         }
       ]
+    },
+    context_resolution: {
+      type: "object",
+      propertyNames: {
+        pattern: "^[^\\r\\n\\u0000]+$"
+      },
+      additionalProperties: {
+        $ref: "#/definitions/jobContextResolution"
+      }
     },
     tested_ref: {
       enum: [
@@ -7111,6 +7129,8 @@ var report_schema_default = {
         "jev-timeout",
         "jev-error",
         "invalid-response",
+        "jev-rate-limited",
+        "jev-payment-required",
         "context-too-large",
         "diff-too-large",
         "unrepresentable-change",
@@ -7124,10 +7144,202 @@ var report_schema_default = {
       type: "string",
       pattern: "^[a-f0-9]{64}$"
     },
-    skip_below: {
-      type: "number",
-      minimum: 0,
-      maximum: 1
+    manifest: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "complete",
+        "hash",
+        "change_count"
+      ],
+      properties: {
+        complete: {
+          type: "boolean"
+        },
+        hash: {
+          type: [
+            "string",
+            "null"
+          ],
+          pattern: "^[a-f0-9]{64}$"
+        },
+        change_count: {
+          type: [
+            "integer",
+            "null"
+          ],
+          minimum: 0
+        }
+      }
+    },
+    analysis: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "manifest_entries",
+        "patches_requested",
+        "patches_read",
+        "preparation_calls",
+        "preparation_bytes",
+        "observation_calls",
+        "observation_bytes",
+        "jev_calls",
+        "analysis_bytes",
+        "limits_reached",
+        "analysed_tasks",
+        "required_without_analysis",
+        "task_states",
+        "coverage",
+        "fallback_scope",
+        "fallback_tasks",
+        "patch_bytes_read",
+        "patch_bytes_delivered",
+        "changes_read",
+        "changes_total",
+        "attempts",
+        "bytes_per_token"
+      ],
+      properties: {
+        manifest_entries: {
+          type: [
+            "integer",
+            "null"
+          ],
+          minimum: 0
+        },
+        patches_requested: {
+          $ref: "#/definitions/counter"
+        },
+        patches_read: {
+          $ref: "#/definitions/counter"
+        },
+        preparation_calls: {
+          $ref: "#/definitions/counter"
+        },
+        preparation_bytes: {
+          $ref: "#/definitions/counter"
+        },
+        observation_calls: {
+          $ref: "#/definitions/counter"
+        },
+        observation_bytes: {
+          $ref: "#/definitions/counter"
+        },
+        jev_calls: {
+          $ref: "#/definitions/counter"
+        },
+        analysis_bytes: {
+          $ref: "#/definitions/counter"
+        },
+        limits_reached: {
+          type: "array",
+          uniqueItems: true,
+          items: {
+            enum: [
+              "manifest-bytes",
+              "patch-unit-bytes",
+              "collected-patch-bytes",
+              "analysis-bytes",
+              "jev-calls",
+              "time"
+            ]
+          }
+        },
+        analysed_tasks: {
+          $ref: "#/definitions/taskIdList"
+        },
+        required_without_analysis: {
+          $ref: "#/definitions/taskIdList"
+        },
+        task_states: {
+          type: "object",
+          propertyNames: {
+            pattern: "^[A-Za-z_][A-Za-z0-9_-]{0,63}$"
+          },
+          additionalProperties: {
+            $ref: "#/definitions/taskState"
+          }
+        },
+        coverage: {
+          type: "object",
+          propertyNames: {
+            pattern: "^[A-Za-z_][A-Za-z0-9_-]{0,63}$"
+          },
+          additionalProperties: {
+            type: "boolean"
+          }
+        },
+        fallback_scope: {
+          enum: [
+            "none",
+            "global",
+            "partial"
+          ]
+        },
+        fallback_tasks: {
+          $ref: "#/definitions/taskIdList"
+        },
+        patch_bytes_read: {
+          $ref: "#/definitions/counter"
+        },
+        patch_bytes_delivered: {
+          $ref: "#/definitions/counter"
+        },
+        changes_read: {
+          $ref: "#/definitions/counter"
+        },
+        changes_total: {
+          type: [
+            "integer",
+            "null"
+          ],
+          minimum: 0
+        },
+        attempts: {
+          $ref: "#/definitions/counter"
+        },
+        bytes_per_token: {
+          anyOf: [
+            {
+              type: "null"
+            },
+            {
+              type: "object",
+              additionalProperties: false,
+              required: [
+                "prior",
+                "observed_min",
+                "samples",
+                "applied",
+                "rejections"
+              ],
+              properties: {
+                prior: {
+                  type: "number",
+                  exclusiveMinimum: 0
+                },
+                observed_min: {
+                  type: [
+                    "number",
+                    "null"
+                  ],
+                  exclusiveMinimum: 0
+                },
+                samples: {
+                  $ref: "#/definitions/counter"
+                },
+                applied: {
+                  type: "number",
+                  exclusiveMinimum: 0
+                },
+                rejections: {
+                  $ref: "#/definitions/counter"
+                }
+              }
+            }
+          ]
+        }
+      }
     }
   },
   definitions: {
@@ -7163,17 +7375,6 @@ var report_schema_default = {
         }
       ]
     },
-    probabilities: {
-      type: "object",
-      propertyNames: {
-        pattern: "^[A-Za-z_][A-Za-z0-9_-]{0,63}$"
-      },
-      additionalProperties: {
-        type: "number",
-        minimum: 0,
-        maximum: 1
-      }
-    },
     observationChunk: {
       type: "object",
       additionalProperties: false,
@@ -7185,11 +7386,13 @@ var report_schema_default = {
         "state_hash",
         "diff_bytes",
         "status",
-        "probabilities",
+        "judgments",
         "model",
         "usage",
         "duration_ms",
-        "error"
+        "error",
+        "unit_index",
+        "change_ids"
       ],
       properties: {
         index: {
@@ -7220,17 +7423,8 @@ var report_schema_default = {
           enum: [
             "completed",
             "failed",
-            "not-started"
-          ]
-        },
-        probabilities: {
-          anyOf: [
-            {
-              type: "null"
-            },
-            {
-              $ref: "#/definitions/probabilities"
-            }
+            "not-started",
+            "not-needed"
           ]
         },
         model: {
@@ -7255,6 +7449,8 @@ var report_schema_default = {
             "jev-timeout",
             "jev-error",
             "invalid-response",
+            "jev-rate-limited",
+            "jev-payment-required",
             null
           ]
         },
@@ -7266,9 +7462,32 @@ var report_schema_default = {
         },
         requests: {
           type: "array",
-          minItems: 1,
+          minItems: 0,
           items: {
             $ref: "#/definitions/observationCall"
+          }
+        },
+        judgments: {
+          type: [
+            "object",
+            "null"
+          ],
+          propertyNames: {
+            pattern: "^[A-Za-z_][A-Za-z0-9_-]{0,63}$"
+          },
+          additionalProperties: {
+            $ref: "#/definitions/taskChoiceJudgment"
+          }
+        },
+        unit_index: {
+          type: "integer",
+          minimum: 0
+        },
+        change_ids: {
+          type: "array",
+          items: {
+            type: "string",
+            pattern: "^c[0-9]+$|^whole-diff$"
           }
         }
       }
@@ -7291,14 +7510,34 @@ var report_schema_default = {
         status: {
           enum: [
             "complete",
-            "incomplete"
+            "incomplete",
+            "stopped-early"
           ]
         },
         chunks: {
           type: "array",
-          minItems: 1,
+          minItems: 0,
           items: {
             $ref: "#/definitions/observationChunk"
+          }
+        },
+        inventory: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "calls",
+            "settled"
+          ],
+          properties: {
+            calls: {
+              type: "array",
+              items: {
+                $ref: "#/definitions/observationCall"
+              }
+            },
+            settled: {
+              $ref: "#/definitions/taskIdList"
+            }
           }
         }
       }
@@ -7442,14 +7681,16 @@ var report_schema_default = {
         "usage",
         "duration_ms",
         "error",
-        "task_ids"
+        "task_ids",
+        "request_bytes"
       ],
       properties: {
         status: {
           enum: [
             "completed",
             "failed",
-            "not-started"
+            "not-started",
+            "not-needed"
           ]
         },
         model: {
@@ -7474,6 +7715,8 @@ var report_schema_default = {
             "jev-timeout",
             "jev-error",
             "invalid-response",
+            "jev-rate-limited",
+            "jev-payment-required",
             null
           ]
         },
@@ -7485,8 +7728,402 @@ var report_schema_default = {
             type: "string",
             pattern: "^[A-Za-z_][A-Za-z0-9_-]{0,63}$"
           }
+        },
+        request_bytes: {
+          type: [
+            "integer",
+            "null"
+          ],
+          minimum: 0
         }
       }
+    },
+    contextError: {
+      enum: [
+        "jev-timeout",
+        "jev-error",
+        "invalid-response",
+        "git-read-failed",
+        "context-too-large",
+        "analysis-budget-exceeded",
+        "jev-rate-limited",
+        "jev-payment-required"
+      ]
+    },
+    choiceJudgment: {
+      anyOf: [
+        {
+          $ref: "#/definitions/inspectChoiceJudgment"
+        },
+        {
+          $ref: "#/definitions/keepChoiceJudgment"
+        }
+      ]
+    },
+    inspectChoiceJudgment: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "choice",
+        "probabilities",
+        "confidence"
+      ],
+      properties: {
+        choice: {
+          enum: [
+            "inspect",
+            "ignore",
+            "uncertain"
+          ]
+        },
+        probabilities: {
+          $ref: "#/definitions/inspectProbabilities"
+        },
+        confidence: {
+          type: "number",
+          minimum: 0,
+          maximum: 1
+        }
+      }
+    },
+    keepChoiceJudgment: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "choice",
+        "probabilities",
+        "confidence"
+      ],
+      properties: {
+        choice: {
+          enum: [
+            "keep",
+            "discard",
+            "uncertain"
+          ]
+        },
+        probabilities: {
+          $ref: "#/definitions/keepProbabilities"
+        },
+        confidence: {
+          type: "number",
+          minimum: 0,
+          maximum: 1
+        }
+      }
+    },
+    inspectProbabilities: {
+      type: "object",
+      required: [
+        "inspect",
+        "ignore",
+        "uncertain"
+      ],
+      propertyNames: {
+        enum: [
+          "inspect",
+          "ignore",
+          "uncertain"
+        ]
+      },
+      properties: {
+        inspect: {
+          type: "number",
+          minimum: 0,
+          maximum: 1
+        },
+        ignore: {
+          type: "number",
+          minimum: 0,
+          maximum: 1
+        },
+        uncertain: {
+          type: "number",
+          minimum: 0,
+          maximum: 1
+        }
+      },
+      additionalProperties: {
+        type: "number",
+        minimum: 0,
+        maximum: 1
+      }
+    },
+    keepProbabilities: {
+      type: "object",
+      required: [
+        "keep",
+        "discard",
+        "uncertain"
+      ],
+      propertyNames: {
+        enum: [
+          "keep",
+          "discard",
+          "uncertain"
+        ]
+      },
+      properties: {
+        keep: {
+          type: "number",
+          minimum: 0,
+          maximum: 1
+        },
+        discard: {
+          type: "number",
+          minimum: 0,
+          maximum: 1
+        },
+        uncertain: {
+          type: "number",
+          minimum: 0,
+          maximum: 1
+        }
+      },
+      additionalProperties: {
+        type: "number",
+        minimum: 0,
+        maximum: 1
+      }
+    },
+    contextCall: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "paths",
+        "request_hash",
+        "status",
+        "judgments",
+        "model",
+        "usage",
+        "duration_ms",
+        "error"
+      ],
+      properties: {
+        paths: {
+          type: "array",
+          items: {
+            type: "string",
+            pattern: "^[^\\u0000]+$"
+          }
+        },
+        request_hash: {
+          type: "string",
+          pattern: "^[a-f0-9]{64}$"
+        },
+        status: {
+          enum: [
+            "completed",
+            "failed",
+            "not-started"
+          ]
+        },
+        judgments: {
+          anyOf: [
+            {
+              type: "null"
+            },
+            {
+              type: "object",
+              propertyNames: {
+                pattern: "^[^\\u0000]+$"
+              },
+              additionalProperties: {
+                $ref: "#/definitions/choiceJudgment"
+              }
+            }
+          ]
+        },
+        model: {
+          type: [
+            "string",
+            "null"
+          ],
+          pattern: "^[^\\r\\n\\u0000]*$"
+        },
+        usage: {
+          $ref: "#/definitions/usageOrNull"
+        },
+        duration_ms: {
+          type: [
+            "number",
+            "null"
+          ],
+          minimum: 0
+        },
+        error: {
+          anyOf: [
+            {
+              $ref: "#/definitions/contextError"
+            },
+            {
+              type: "null"
+            }
+          ]
+        }
+      }
+    },
+    contextPass: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "index",
+        "calls"
+      ],
+      properties: {
+        index: {
+          type: "integer",
+          minimum: 1,
+          maximum: 3
+        },
+        calls: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/contextCall"
+          }
+        }
+      }
+    },
+    contextSource: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "path",
+        "sha256",
+        "pass"
+      ],
+      properties: {
+        path: {
+          type: "string",
+          pattern: "^[^\\u0000]+$"
+        },
+        sha256: {
+          type: "string",
+          pattern: "^[a-f0-9]{64}$"
+        },
+        pass: {
+          type: "integer",
+          minimum: 1,
+          maximum: 3
+        }
+      }
+    },
+    jobContextResolution: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "task_ids",
+        "status",
+        "error",
+        "sources",
+        "passes"
+      ],
+      properties: {
+        task_ids: {
+          type: "array",
+          items: {
+            type: "string",
+            pattern: "^[^\\r\\n\\u0000]*$"
+          }
+        },
+        status: {
+          enum: [
+            "complete",
+            "incomplete"
+          ]
+        },
+        error: {
+          anyOf: [
+            {
+              $ref: "#/definitions/contextError"
+            },
+            {
+              type: "null"
+            }
+          ]
+        },
+        sources: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/contextSource"
+          }
+        },
+        passes: {
+          type: "array",
+          items: {
+            $ref: "#/definitions/contextPass"
+          }
+        }
+      }
+    },
+    taskChoiceJudgment: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "choice",
+        "probabilities",
+        "confidence"
+      ],
+      properties: {
+        choice: {
+          enum: [
+            "required",
+            "independent",
+            "unresolved"
+          ]
+        },
+        probabilities: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "required",
+            "independent",
+            "unresolved"
+          ],
+          properties: {
+            required: {
+              type: "number",
+              minimum: 0,
+              maximum: 1
+            },
+            independent: {
+              type: "number",
+              minimum: 0,
+              maximum: 1
+            },
+            unresolved: {
+              type: "number",
+              minimum: 0,
+              maximum: 1
+            }
+          }
+        },
+        confidence: {
+          type: "number",
+          minimum: 0,
+          maximum: 1
+        }
+      }
+    },
+    taskState: {
+      enum: [
+        "pending",
+        "settled-run",
+        "settled-skip",
+        "fallback-run"
+      ]
+    },
+    taskIdList: {
+      type: "array",
+      uniqueItems: true,
+      items: {
+        type: "string",
+        pattern: "^[A-Za-z_][A-Za-z0-9_-]{0,63}$"
+      }
+    },
+    counter: {
+      type: "integer",
+      minimum: 0
     }
   }
 };
